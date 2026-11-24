@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rit Downloader: save sermons, music and videos in bulk</title>
+<meta name="description" content="Free app for Windows and Mac. Search for a preacher or channel, load every video, and download them all as video or MP3 in the quality you choose.">
+<link rel="icon" href="icon.png">
+<style>
+  :root { --bg:#0e1015; --s:#161920; --s2:#1d2129; --b:#2a303b; --t:#e9ebf1; --m:#9199a8; --a:#7c6cff; --a2:#9a8dff; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--t); font:16px/1.55 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  .wrap { max-width:1040px; margin:0 auto; padding:0 22px; }
+  header { display:flex; align-items:center; gap:10px; padding:20px 0; font-weight:600; font-size:18px; }
+  header img { width:32px; height:32px; }
+  header b { color:var(--a2); }
+  .hero { text-align:center; padding:56px 0 30px; }
+  h1 { font-size:clamp(32px,5vw,50px); line-height:1.1; margin:0 0 16px; letter-spacing:-.02em; }
+  .lead { color:var(--m); font-size:19px; max-width:640px; margin:0 auto 34px; }
+  .cta { display:inline-flex; flex-direction:column; align-items:center; gap:10px; }
+  .btn { display:inline-flex; align-items:center; gap:10px; background:var(--a); color:#fff; text-decoration:none; font-weight:650; font-size:18px; padding:15px 28px; border-radius:12px; }
+  .btn:hover { background:var(--a2); }
+  .btn svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
+  .small { color:var(--m); font-size:14px; }
+  .small a { color:var(--a2); }
+  .shot { margin:44px auto 0; max-width:960px; border:1px solid var(--b); border-radius:14px; overflow:hidden; box-shadow:0 20px 60px rgba(0,0,0,.5); background:var(--s); }
+  .shot img { display:block; width:100%; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:16px; margin:60px 0; }
+  .card { background:var(--s); border:1px solid var(--b); border-radius:14px; padding:20px; }
+  .card h3 { margin:0 0 6px; font-size:16px; }
+  .card p { margin:0; color:var(--m); font-size:14.5px; }
+  h2 { font-size:26px; margin:0 0 18px; }
+  table { width:100%; border-collapse:collapse; background:var(--s); border:1px solid var(--b); border-radius:14px; overflow:hidden; }
+  td, th { padding:14px 16px; border-bottom:1px solid var(--b); text-align:left; font-size:15px; }
+  th { color:var(--m); font-weight:600; font-size:13px; }
+  td a { color:var(--a2); font-weight:600; text-decoration:none; }
+  .steps { color:var(--m); font-size:15px; }
+  .steps b { color:var(--t); }
+  details { background:var(--s); border:1px solid var(--b); border-radius:12px; padding:14px 18px; margin-bottom:10px; }
+  summary { cursor:pointer; font-weight:600; }
+  details p { color:var(--m); margin:10px 0 0; font-size:15px; }
+  footer { color:var(--m); font-size:13px; padding:40px 0 60px; border-top:1px solid var(--b); margin-top:60px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><img src="icon.png" alt=""> Rit <b>Downloader</b></header>
+
+  <section class="hero">
+    <h1>Every sermon. Every song.<br>Saved in one click.</h1>
+    <p class="lead">Search for a preacher, a ministry or a channel. Load everything they have published, then download it all as video or MP3, in the quality you choose. Free for Windows and Mac.</p>
+    <div class="cta">
+      <a class="btn" id="mainBtn" href="#downloads">
+        <svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
+        <span id="mainLabel">Download</span>
+      </a>
+      <span class="small" id="mainNote">Free &middot; <a href="#downloads">Other systems</a></span>
+    </div>
+    <div class="shot"><img src="screenshot.png" alt="Rit Downloader showing a channel's sermons ready to download" onerror="this.parentNode.remove()"></div>
+  </section>
+
+  <section class="grid">
+    <div class="card"><h3>Whole channels at once</h3><p>Load every video and live service from a channel, then filter by title or length and sort by date.</p></div>
+    <div class="card"><h3>Video or audio</h3><p>MP4, MKV or WebM from 4K down to 144p. MP3, M4A, FLAC or WAV from 320 down to 64 kbps.</p></div>
+    <div class="card"><h3>Only what's new</h3><p>Come back to a channel next month and it downloads only the sermons you don't have yet.</p></div>
+    <div class="card"><h3>13 languages</h3><p>English, French, Spanish, Portuguese, German, Indonesian, Russian, Swahili, Hausa, Yoruba, Arabic, Chinese and Hindi.</p></div>
+    <div class="card"><h3>Private by design</h3><p>A password lock keeps others on your computer out. Everything stays on your device.</p></div>
+    <div class="card"><h3>Many sites</h3><p>YouTube and SoundCloud search, plus links from Facebook, Instagram, TikTok, X and over 1,800 other sites.</p></div>
+  </section>
+
+  <section id="downloads">
+    <h2>Downloads</h2>
+    <table>
+      <tr><th>Your computer</th><th>File</th><th></th></tr>
+      <tr><td>Windows 10 or 11 (64-bit)</td><td><a data-file="RitDownloader-Setup-Windows.exe" href="#">Installer (.exe)</a></td><td class="small">Recommended</td></tr>
+      <tr><td>Windows, no installation</td><td><a data-file="RitDownloader-Portable-Windows.zip" href="#">Portable (.zip)</a></td><td class="small">Unzip and run RitDownloader.exe</td></tr>
+      <tr><td>Mac with Apple Silicon (M1 to M4)</td><td><a data-file="RitDownloader-macOS-AppleSilicon.dmg" href="#">Disk image (.dmg)</a></td><td class="small">macOS 11 or newer</td></tr>
+      <tr><td>Mac with an Intel processor</td><td><a data-file="RitDownloader-macOS-Intel.dmg" href="#">Disk image (.dmg)</a></td><td class="small">macOS 11 or newer</td></tr>
+    </table>
+    <p class="small">Not sure which Mac you have? Apple menu &rsaquo; About This Mac. If it says "Chip: Apple M&hellip;", choose Apple Silicon. &middot; <a id="allReleases" href="#">All versions and release notes</a></p>
+  </section>
+
+  <section style="margin-top:50px">
+    <h2>Installing</h2>
+    <details open><summary>Windows</summary>
+      <p class="steps">Run <b>RitDownloader-Setup-Windows.exe</b>. If a blue "Windows protected your PC" box appears, click <b>More info</b>, then <b>Run anyway</b>. This appears because the app is new and not yet widely downloaded. No administrator rights are needed.</p></details>
+    <details><summary>Mac</summary>
+      <p class="steps">Open the .dmg and drag <b>Rit Downloader</b> into <b>Applications</b>. The first time you open it, macOS may block it. On macOS 15 or newer, go to <b>System Settings &rsaquo; Privacy &amp; Security</b> and click <b>Open Anyway</b>. On older versions, right-click the app and choose <b>Open</b>. The app then appears in the menu bar at the top of the screen.</p></details>
+    <details><summary>Is it safe? Does it cost anything?</summary>
+      <p>It's free. It runs entirely on your own computer and doesn't collect or send any personal data. It connects only to the sites you download from and, to check for updates, to GitHub.</p></details>
+    <details><summary>Downloads stopped working</summary>
+      <p>Open <b>Settings &rsaquo; Update</b> in the app. Video sites change often and the download engine updates to keep up.</p></details>
+  </section>
+
+  <footer>
+    Please download only content you own, that is freely licensed, or that you have permission to download, and follow each website's terms.
+    Rit Downloader is built on open-source software including yt-dlp and FFmpeg.
+  </footer>
+</div>
+<script>
+  // Repository is detected from the GitHub Pages address (user.github.io/repo), or set it here:
+  const REPO_OVERRIDE = "SirrJay/rit-downloader";
+  const m = location.hostname.match(/^([\w-]+)\.github\.io$/);
+  const repo = REPO_OVERRIDE || (m ? `${m[1]}/${location.pathname.split("/")[1]}` : "");
+  const base = repo ? `https://github.com/${repo}/releases/latest/download/` : "#";
+  document.querySelectorAll("[data-file]").forEach(a => a.href = repo ? base + a.dataset.file : "#");
+  document.getElementById("allReleases").href = repo ? `https://github.com/${repo}/releases` : "#";
+
+  const ua = navigator.userAgent, plat = navigator.userAgentData?.platform || navigator.platform || "";
+  let file = null, label = "Download";
+  if (/Win/i.test(plat) || /Windows/i.test(ua)) { file = "RitDownloader-Setup-Windows.exe"; label = "Download for Windows"; }
+  else if (/Mac/i.test(plat) || /Macintosh/i.test(ua)) {
+    file = "RitDownloader-macOS-AppleSilicon.dmg"; label = "Download for Mac";
+    // Apple Silicon can't be detected reliably in every browser; the table below lists both.
+    try {
+      const c = document.createElement("canvas").getContext("webgl");
+      const r = c && c.getExtension("WEBGL_debug_renderer_info") && c.getParameter(c.getExtension("WEBGL_debug_renderer_info").UNMASKED_RENDERER_WEBGL);
+      if (r && /Intel|AMD|Radeon/i.test(r) && !/Apple/i.test(r)) { file = "RitDownloader-macOS-Intel.dmg"; label = "Download for Mac (Intel)"; }
+    } catch (e) {}
+  }
+  if (file && repo) {
+    document.getElementById("mainBtn").href = base + file;
+    document.getElementById("mainLabel").textContent = label;
+  }
+</script>
+</body>
+</html>

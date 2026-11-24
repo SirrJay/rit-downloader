@@ -1,0 +1,8 @@
+yt-dlp[default]
+yt-dlp-ejs
+flask
+waitress
+pystray
+pillow
+certifi
+pyinstaller>=6.16

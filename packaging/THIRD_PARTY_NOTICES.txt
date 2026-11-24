@@ -1,0 +1,23 @@
+Rit Downloader bundles the following third-party software. Each is a separate program
+or library used under its own license. Source code is available at the links below.
+
+yt-dlp ............ The Unlicense (public domain)      https://github.com/yt-dlp/yt-dlp
+yt-dlp-ejs ........ The Unlicense / MIT                https://github.com/yt-dlp/ejs
+FFmpeg / ffprobe .. GNU GPL v3 (these builds)          https://ffmpeg.org
+    Windows builds: https://github.com/yt-dlp/FFmpeg-Builds  (build scripts + exact sources)
+    macOS builds:   https://ffmpeg.martin-riedl.de          (build scripts + exact sources)
+    FFmpeg is run as a separate program; you may replace it with any other build.
+Deno .............. MIT License                        https://github.com/denoland/deno
+Python ............ PSF License                        https://www.python.org
+Flask ............. BSD-3-Clause                       https://github.com/pallets/flask
+Waitress .......... ZPL 2.1                            https://github.com/Pylons/waitress
+pystray ........... LGPL v3                            https://github.com/moses-palmer/pystray
+Pillow ............ MIT-CMU (HPND)                     https://github.com/python-pillow/Pillow
+certifi ........... MPL 2.0                            https://github.com/certifi/python-certifi
+websockets ........ BSD-3-Clause                       https://github.com/python-websockets/websockets
+Brotli ............ MIT                                https://github.com/google/brotli
+mutagen ........... GPL v2+                            https://github.com/quodlibet/mutagen
+pycryptodomex ..... BSD / Public domain                https://github.com/Legrandin/pycryptodome
+requests / urllib3  Apache 2.0 / MIT                   https://github.com/psf/requests
+
+The full license texts are available at the project pages above.

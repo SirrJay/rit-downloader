@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Rit Downloader - Send to app",
+  "version": "1.0.0",
+  "description": "Send the current page or any link to the Rit Downloader desktop app, or download it there as video or MP3.",
+  "permissions": ["contextMenus", "activeTab", "notifications"],
+  "host_permissions": ["http://127.0.0.1:8765/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "Rit Downloader", "default_popup": "popup.html", "default_icon": { "128": "icon128.png" } },
+  "icons": { "128": "icon128.png" }
+}

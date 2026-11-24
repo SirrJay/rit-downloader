@@ -1,0 +1,817 @@
+/* Rit Downloader front-end */
+"use strict";
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+const S = {
+  settings: {}, sys: {}, kind: "search",
+  entries: [], byId: new Map(), sel: new Set(), shown: [],
+  browseId: null, since: 0, loading: false, req: null, title: "", group: "",
+  history: [], lastIdx: null, view: "grid", renderedCount: 0,
+};
+
+async function api(path, body) {
+  const opt = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch("/api/" + path, opt);
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401 && j.locked) { showAuth(); throw new Error(t("The app is locked")); }
+  if (!r.ok) { const e = new Error(j.error || r.statusText); e.data = j; throw e; }
+  return j;
+}
+
+function toast(msg, kind = "") {
+  const t = document.createElement("div");
+  t.className = "toast " + kind;
+  t.textContent = msg;
+  $("#toasts").appendChild(t);
+  setTimeout(() => t.remove(), kind === "bad" ? 7000 : 3200);
+}
+
+/* ---------------------------------------------------------------- formatting */
+const fmtDur = (s) => {
+  if (!s && s !== 0) return "";
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+  return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(x).padStart(2, "0");
+};
+const fmtLong = (s) => {
+  const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+  return h ? t("{h} h {m} min", { h, m }) : t("{m} min", { m });
+};
+const fmtNum = (n) => (n || n === 0 ? new Intl.NumberFormat(I18N.lang, { notation: "compact", maximumFractionDigits: 1 }).format(n) : "");
+const fmtDate = (d) => {
+  if (!d || d.length !== 8) return "";
+  try {
+    return new Intl.DateTimeFormat(I18N.lang, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })
+      .format(new Date(Date.UTC(+d.slice(0, 4), +d.slice(4, 6) - 1, +d.slice(6))));
+  } catch { return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6)}`; }
+};
+const fmtBytes = (b) => {
+  if (!b) return "";
+  const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0;
+  while (b >= 1024 && i < 4) { b /= 1024; i++; }
+  return b.toFixed(b < 10 && i > 1 ? 1 : 0) + " " + u[i];
+};
+
+/* ---------------------------------------------------------------- settings */
+function applySettings() {
+  const s = S.settings;
+  document.documentElement.dataset.theme = s.theme || "dark";
+  $$("[data-set]").forEach((el) => {
+    const v = s[el.dataset.set];
+    if (el.type === "checkbox") el.checked = !!v;
+    else if (v !== undefined && v !== null) el.value = String(v);
+  });
+  $$("#modeSeg button").forEach((b) => b.classList.toggle("on", b.dataset.mode === s.mode));
+  $("#videoOpts").classList.toggle("hidden", s.mode !== "video");
+  $("#audioOpts").classList.toggle("hidden", s.mode !== "audio");
+  $("#dlDir").textContent = s.download_dir;
+  renderDrives();
+  updateSelInfo();
+}
+
+let saveT;
+async function saveSetting(changes, quiet) {
+  Object.assign(S.settings, changes);
+  applySettings();
+  clearTimeout(saveT);
+  saveT = setTimeout(async () => {
+    try { S.settings = await api("settings", changes); if (!quiet) toast(t("Saved"), "ok"); } catch (e) { toast(t("Couldn't save settings:") + " " + e.message, "bad"); }
+  }, 150);
+}
+
+document.addEventListener("change", (ev) => {
+  const el = ev.target.closest("[data-set]");
+  if (!el) return;
+  let v = el.type === "checkbox" ? el.checked : el.value;
+  if (el.dataset.num !== undefined) v = Number(v);
+  const inBar = !!el.closest("#actionbar");
+  saveSetting({ [el.dataset.set]: v }, inBar);
+});
+$("#modeSeg").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (b) saveSetting({ mode: b.dataset.mode }, true);
+});
+
+/* ---------------------------------------------------------------- system info */
+async function refreshSystem() {
+  try {
+    S.sys = await api("system");
+    const free = S.sys.free_gb;
+    const drive = (S.settings.download_dir || "").slice(0, 3);
+    $("#sysinfo").innerHTML = free == null ? "" :
+      `<svg class="ico" viewBox="0 0 24 24"><path d="M22 12H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+       <span class="${free < 10 ? "warn" : ""}">${esc(drive)} &middot; ${esc(t("{n} GB free", { n: free }))}</span>`;
+    $("#ytv").textContent = S.sys.ytdlp;
+    $("#appv").textContent = S.sys.version || "";
+    $("#ffv").textContent = S.sys.ffmpeg ? t("Installed") : t("Missing (needed for MP3, merging HD and conversion)");
+    $("#ffBtn").classList.toggle("hidden", !!S.sys.ffmpeg);
+    renderDrives();
+    updateSelInfo();
+  } catch { /* server restarting */ }
+}
+
+function renderDrives() {
+  const el = $("#drives"); if (!el || !S.sys.drives) return;
+  const cur = (S.settings.download_dir || "").slice(0, 3).toUpperCase();
+  el.innerHTML = S.sys.drives.map((d) => {
+    const usedPct = Math.round(100 * (1 - d.free_gb / d.total_gb));
+    return `<button class="drive ${d.drive.toUpperCase() === cur ? "on" : ""}" data-drive="${esc(d.drive)}" title="${esc(t("Save to {path}", { path: d.drive + "Rit Downloads" }))}">
+      <b>${esc(d.drive)}</b><small>${esc(t("{free} GB free of {total}", { free: d.free_gb, total: Math.round(d.total_gb) }))}</small><i><u style="width:${usedPct}%"></u></i></button>`;
+  }).join("");
+}
+$("#drives").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-drive]"); if (!b) return;
+  saveSetting({ download_dir: b.dataset.drive + "Rit Downloads" }).then(() => setTimeout(refreshSystem, 400));
+});
+
+/* ---------------------------------------------------------------- tabs */
+function showView(v) {
+  $$("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.view === v));
+  $$(".view").forEach((s) => s.classList.toggle("on", s.id === "view-" + v));
+  document.body.classList.toggle("no-actions", v !== "browse");
+  if (v === "downloads") pollJobs();
+  if (v === "settings") refreshSystem();
+}
+$("#tabs").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) showView(b.dataset.view); });
+
+/* ---------------------------------------------------------------- search */
+const PLACEHOLDER = {
+  search: "Search for a preacher, a topic or a title",
+  channels: "Type a person's or ministry's name, e.g. a pastor or a church",
+  playlists: "Search playlists, e.g. a sermon series",
+  url: "Paste a link to a channel, playlist or video from YouTube, Facebook, TikTok...",
+};
+function setKind(k, focus = true) {
+  S.kind = k;
+  $$("#kindSeg button").forEach((b) => b.classList.toggle("on", b.dataset.kind === k));
+  $("#q").placeholder = t(PLACEHOLDER[k]);
+  $("#urlOpts").classList.toggle("hidden", k !== "url");
+  $("#platform").disabled = k !== "search";
+  if (k !== "search") $("#platform").value = "youtube";
+  $("#limit").disabled = k === "url";
+  $("#go").textContent = k === "url" ? t("Load") : t("Search");
+  if (focus) $("#q").focus();
+}
+$("#kindSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) setKind(b.dataset.kind); });
+$("#q").addEventListener("keydown", (e) => { if (e.key === "Enter") doSearch(); });
+$("#q").addEventListener("paste", () => setTimeout(() => {
+  const v = $("#q").value.trim();
+  if (/^https?:\/\//i.test(v) && S.kind !== "url") setKind("url");
+}, 0));
+$("#go").addEventListener("click", doSearch);
+
+function urlTabs() { return $$("#urlOpts input:checked").map((i) => i.value); }
+
+function doSearch() {
+  let q = $("#q").value.trim();
+  if (!q) { $("#q").focus(); return; }
+  let kind = S.kind;
+  if (/^https?:\/\//i.test(q) || /^(www\.)?[\w-]+\.(com|be|tv|net|org)\//i.test(q)) {
+    kind = "url"; if (!/^https?:/i.test(q)) q = "https://" + q;
+  }
+  const req = { kind, query: q, platform: $("#platform").value, limit: +$("#limit").value };
+  if (kind === "url") req.tabs = urlTabs().length ? urlTabs() : ["videos"];
+  startBrowse(req, true);
+}
+
+function snapshotCurrent() {
+  if (!S.req) return null;
+  return { req: S.req, entries: S.entries.slice(), title: S.title, group: S.group, scroll: $("main").scrollTop };
+}
+
+async function startBrowse(req, pushHistory) {
+  if (pushHistory && S.req) {
+    const snap = snapshotCurrent(); if (snap) S.history.push(snap);
+    if (S.history.length > 15) S.history.shift();
+  }
+  if (S.browseId && S.loading) api(`browse/${S.browseId}/stop`, {}).catch(() => {});
+  S.req = req; S.entries = []; S.byId.clear(); S.sel.clear(); S.since = 0; S.lastIdx = null;
+  S.title = req.kind === "search" ? t('Results for "{q}"', { q: req.query }) : t("Loading..."); S.group = req.kind === "search" ? req.query : "";
+  $("#filter").value = ""; $("#durFilter").value = ""; $("#sort").value = "";
+  $("#hero").classList.add("hidden");
+  $("#resultsHead").classList.remove("hidden");
+  $("#backBtn").classList.toggle("hidden", !S.history.length);
+  render(true);
+  setLoading(true, t("Contacting the site..."));
+  try {
+    const { id } = await api("browse", req);
+    S.browseId = id;
+    pollBrowse(id);
+  } catch (e) { setLoading(false); toast(e.message, "bad"); }
+}
+
+function setLoading(on, text) {
+  S.loading = on;
+  $("#loadingMore").classList.toggle("hidden", !on);
+  $("#stopLoad").classList.toggle("hidden", !on);
+  if (text) $("#loadingText").textContent = text;
+}
+
+async function pollBrowse(id) {
+  if (id !== S.browseId) return;
+  let snap;
+  try { snap = await api(`browse/${id}?since=${S.since}`); } catch (e) { setLoading(false); toast(e.message, "bad"); return; }
+  if (id !== S.browseId) return;
+  if (snap.entries.length) {
+    for (const e of snap.entries) { if (!S.byId.has(e.id)) { S.byId.set(e.id, e); S.entries.push(e); } }
+    S.since = snap.total;
+    render(false);
+  }
+  if (snap.title && S.req.kind !== "search") {
+    S.title = snap.title.replace(/ - (Videos|Live|Shorts|Home)$/i, "");
+    S.group = S.req.kind === "url" ? S.title : S.group;
+  }
+  if (S.req.kind === "channels" || S.req.kind === "playlists") S.title = snap.title;
+  $("#rTitle").textContent = S.title;
+  $("#rTitle").title = S.title;
+  const n = S.entries.length;
+  if (snap.done) {
+    setLoading(false);
+    $("#rStatus").textContent = snap.error && !n ? t("Error") : countText(n);
+    if (snap.error) toast(snap.error, "bad");
+    if (!n && !snap.error) $("#results").innerHTML = `<div class="hero small"><h2>${esc(t("Nothing found"))}</h2><p class="muted">${t("Try different words, or choose <em>Channels &amp; people</em> to find the person's channel.")}</p></div>`;
+  } else {
+    $("#rStatus").textContent = t("{n} loaded", { n: n.toLocaleString() });
+    $("#loadingText").textContent = n ? t("Loading more... {n} so far. Large channels can take a minute.", { n: n.toLocaleString() }) : t("Contacting the site...");
+    setTimeout(() => pollBrowse(id), 700);
+  }
+}
+$("#stopLoad").addEventListener("click", () => { if (S.browseId) api(`browse/${S.browseId}/stop`, {}); });
+$("#backBtn").addEventListener("click", () => {
+  const snap = S.history.pop(); if (!snap) return;
+  if (S.browseId && S.loading) api(`browse/${S.browseId}/stop`, {}).catch(() => {});
+  S.browseId = null; setLoading(false);
+  S.req = snap.req; S.entries = snap.entries; S.byId = new Map(snap.entries.map((e) => [e.id, e]));
+  S.title = snap.title; S.group = snap.group; S.sel.clear();
+  $("#rTitle").textContent = S.title;
+  $("#rStatus").textContent = countText(S.entries.length);
+  $("#backBtn").classList.toggle("hidden", !S.history.length);
+  render(true);
+  $("main").scrollTop = snap.scroll || 0;
+});
+
+const countText = (n) => (n === 1 ? t("1 item") : t("{n} items", { n: n.toLocaleString() }));
+
+/* ---------------------------------------------------------------- filtering + rendering */
+function computeShown() {
+  const words = $("#filter").value.toLowerCase().split(/\s+/).filter(Boolean);
+  const [lo, hi] = ($("#durFilter").value || "-").split("-").map((x) => (x === "" ? null : +x));
+  let list = S.entries.filter((e) => {
+    if (words.length) {
+      const hay = (e.title + " " + e.channel + " " + (e.date || "")).toLowerCase();
+      if (!words.every((w) => hay.includes(w))) return false;
+    }
+    if (lo != null || hi != null) {
+      if (e.kind !== "video") return false;
+      const d = e.duration || 0;
+      if (lo != null && d < lo) return false;
+      if (hi != null && d >= hi) return false;
+    }
+    return true;
+  });
+  const by = $("#sort").value;
+  const cmp = {
+    new: (a, b) => (b.date || "").localeCompare(a.date || ""),
+    old: (a, b) => (a.date || "99999999").localeCompare(b.date || "99999999"),
+    long: (a, b) => (b.duration || 0) - (a.duration || 0),
+    short: (a, b) => (a.duration || 1e9) - (b.duration || 1e9),
+    views: (a, b) => (b.views || 0) - (a.views || 0),
+    az: (a, b) => a.title.localeCompare(b.title),
+  }[by];
+  if (cmp) list = list.slice().sort(cmp);
+  return list;
+}
+const isFiltered = () => $("#filter").value.trim() || $("#durFilter").value || $("#sort").value;
+
+const ICON = {
+  video: '<svg class="ico" viewBox="0 0 24 24"><rect x="2" y="5" width="15" height="14" rx="2"/><path d="m17 10 5-3v10l-5-3z"/></svg>',
+  audio: '<svg class="ico" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
+  q: '<svg class="ico" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>',
+  ext: '<svg class="ico" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3"/></svg>',
+  check: '<svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>',
+};
+
+function card(e, idx) {
+  const sel = S.sel.has(e.id) ? " sel" : "";
+  const img = e.thumb ? `<img loading="lazy" src="${esc(e.thumb)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : "";
+  if (e.kind === "channel") {
+    return `<div class="item channel" data-id="${esc(e.id)}" data-idx="${idx}">
+      <div class="thumb" data-act="loadch">${img}<span class="kindtag">${esc(t("Channel"))}</span></div>
+      <div class="body"><div class="title">${esc(e.title)}</div>
+        <div class="meta">${e.followers ? `<span>${esc(t("{n} subscribers", { n: fmtNum(e.followers) }))}</span>` : ""}${e.count ? `<span>${esc(t("{n} videos", { n: fmtNum(e.count) }))}</span>` : ""}</div>
+        <div class="acts"><button class="btn primary" data-act="loadch">${esc(t("Load all videos"))}</button>
+        <button class="btn ghost" data-act="open" title="${esc(t("Open on the website"))}">${ICON.ext}</button></div></div></div>`;
+  }
+  if (e.kind === "playlist") {
+    return `<div class="item playlist" data-id="${esc(e.id)}" data-idx="${idx}">
+      <div class="thumb" data-act="openpl">${img}<span class="kindtag">${esc(t("Playlist"))}</span>${e.count ? `<span class="dur">${esc(t("{n} videos", { n: e.count }))}</span>` : ""}</div>
+      <div class="body"><div class="title">${esc(e.title)}</div>
+        <div class="meta"><span>${esc(e.channel)}</span></div>
+        <div class="acts"><button class="btn primary" data-act="openpl">${esc(t("Open playlist"))}</button>
+        <button class="btn ghost" data-act="open" title="${esc(t("Open on the website"))}">${ICON.ext}</button></div></div></div>`;
+  }
+  const live = e.live === "is_live" ? `<span class="live">${esc(t("LIVE"))}</span>` : e.live === "is_upcoming" ? `<span class="live">${esc(t("UPCOMING"))}</span>` : "";
+  const chan = e.channel ? (e.channel_url ? `<a href="#" data-act="channel" title="${esc(t("Show all videos by {name}", { name: e.channel }))}">${esc(e.channel)}</a>` : `<span>${esc(e.channel)}</span>`) : "";
+  return `<div class="item${sel}" data-id="${esc(e.id)}" data-idx="${idx}">
+    <div class="thumb" data-act="toggle">${img}<span class="tick">${ICON.check}</span>${e.duration ? `<span class="dur">${fmtDur(e.duration)}</span>` : ""}${live}</div>
+    <div class="body"><div class="title" title="${esc(e.title)}">${esc(e.title)}</div>
+      <div class="meta">${chan}${e.views ? `<span>${esc(t("{n} views", { n: fmtNum(e.views) }))}</span>` : ""}${e.date ? `<span>${fmtDate(e.date)}</span>` : ""}</div>
+      <div class="acts">
+        <button class="btn" data-act="dl-video" title="${esc(t("Download video with the settings below"))}">${ICON.video}${esc(t("Video"))}</button>
+        <button class="btn" data-act="dl-audio" title="${esc(t("Download audio with the settings below"))}">${ICON.audio}${esc(t("Audio"))}</button>
+        <button class="btn ghost" data-act="quality" title="${esc(t("See every available quality"))}">${ICON.q}</button>
+        <button class="btn ghost" data-act="open" title="${esc(t("Open on the website"))}">${ICON.ext}</button>
+      </div></div></div>`;
+}
+
+let renderT;
+function render(full) {
+  const grid = $("#results");
+  grid.className = "grid" + (S.view === "list" ? " list" : "") + (S.sel.size ? " selecting" : "");
+  if (!full && !isFiltered() && S.renderedCount <= S.entries.length && S.shown.length === S.renderedCount) {
+    // fast path: append new items only
+    const add = S.entries.slice(S.renderedCount);
+    if (add.length) {
+      grid.insertAdjacentHTML("beforeend", add.map((e, i) => card(e, S.renderedCount + i)).join(""));
+      S.shown = S.entries.slice();
+      S.renderedCount = S.entries.length;
+    }
+    updateSelInfo();
+    return;
+  }
+  clearTimeout(renderT);
+  renderT = setTimeout(() => {
+    S.shown = computeShown();
+    grid.innerHTML = S.shown.map(card).join("");
+    S.renderedCount = isFiltered() ? -1 : S.shown.length;
+    updateSelInfo();
+  }, full ? 0 : 120);
+}
+["#filter", "#durFilter", "#sort"].forEach((s) => $(s).addEventListener("input", () => render(true)));
+$("#viewSeg").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  S.view = b.dataset.v; localStorage.setItem("rit.view", S.view);
+  $$("#viewSeg button").forEach((x) => x.classList.toggle("on", x === b));
+  render(true);
+});
+
+function selectable() { return S.shown.filter((e) => e.kind === "video"); }
+function refreshSelClasses() {
+  $$("#results .item").forEach((el) => el.classList.toggle("sel", S.sel.has(el.dataset.id)));
+  $("#results").classList.toggle("selecting", S.sel.size > 0);
+  updateSelInfo();
+}
+$("#selAll").addEventListener("click", () => { selectable().forEach((e) => S.sel.add(e.id)); refreshSelClasses(); });
+$("#selNone").addEventListener("click", () => { S.sel.clear(); refreshSelClasses(); });
+
+$("#results").addEventListener("click", (ev) => {
+  const actEl = ev.target.closest("[data-act]");
+  const item = ev.target.closest(".item");
+  if (!item) return;
+  const e = S.byId.get(item.dataset.id);
+  const act = actEl ? actEl.dataset.act : null;
+  if (!act) return;
+  ev.preventDefault();
+  if (act === "toggle") {
+    const idx = +item.dataset.idx;
+    if (ev.shiftKey && S.lastIdx != null) {
+      const [a, b] = [Math.min(S.lastIdx, idx), Math.max(S.lastIdx, idx)];
+      S.shown.slice(a, b + 1).forEach((x) => { if (x.kind === "video") S.sel.add(x.id); });
+    } else {
+      S.sel.has(e.id) ? S.sel.delete(e.id) : S.sel.add(e.id);
+    }
+    S.lastIdx = idx;
+    refreshSelClasses();
+  } else if (act === "dl-video" || act === "dl-audio") {
+    enqueue([e], { mode: act === "dl-video" ? "video" : "audio" });
+  } else if (act === "quality") {
+    openQualities(e);
+  } else if (act === "open") {
+    window.open(e.url, "_blank");
+  } else if (act === "loadch") {
+    startBrowse({ kind: "url", query: e.url, tabs: urlTabs().length ? urlTabs() : ["videos", "streams"] }, true);
+  } else if (act === "channel") {
+    startBrowse({ kind: "url", query: e.channel_url, tabs: urlTabs().length ? urlTabs() : ["videos", "streams"] }, true);
+  } else if (act === "openpl") {
+    startBrowse({ kind: "url", query: e.url }, true);
+  }
+});
+
+/* ---------------------------------------------------------------- selection summary + size estimate */
+const VKBPS = { best: 5000, 2160: 18000, 1440: 9000, 1080: 4500, 720: 2400, 480: 1100, 360: 650, 240: 350, 144: 180 };
+function estimateBytes(seconds) {
+  const s = S.settings;
+  let kbps;
+  if (s.mode === "audio") {
+    kbps = { wav: 1411, flac: 900 }[s.audio_format] || (+s.audio_quality || 190);
+    if (s.audio_format === "original") kbps = 130;
+  } else kbps = (VKBPS[s.video_quality] || 4500) + 130;
+  return seconds * kbps * 1000 / 8;
+}
+function updateSelInfo() {
+  const picked = S.entries.filter((e) => S.sel.has(e.id));
+  const n = picked.length;
+  const shownVideos = selectable();
+  $("#dlSel").disabled = !n;
+  $("#dlSel").textContent = n ? t("Download selected ({n})", { n: n.toLocaleString() }) : t("Download selected");
+  $("#dlShown").textContent = t("Download all shown ({n})", { n: shownVideos.length.toLocaleString() });
+  $("#dlShown").disabled = !shownVideos.length;
+  const base = n ? picked : shownVideos;
+  if (!base.length) { $("#selInfo").textContent = t("Nothing selected"); return; }
+  const secs = base.reduce((t, e) => t + (e.duration || 0), 0);
+  const est = estimateBytes(secs);
+  const free = S.sys.free_gb;
+  const tooBig = free != null && est / 2 ** 30 > free * 0.95;
+  const cnt = n ? t("{n} selected", { n: `<b>${n.toLocaleString()}</b>` }) : t("{n} shown", { n: `<b>${base.length.toLocaleString()}</b>` });
+  const size = secs ? ` &middot; ${t("about {size}", { size: `<b class="${tooBig ? "warn" : ""}">${fmtBytes(est)}</b>` })}${tooBig ? ` <span class="warn">${esc(t("(more than the {n} GB free on this drive)", { n: free }))}</span>` : ""}` : "";
+  $("#selInfo").innerHTML = `${cnt}${secs ? ` &middot; ${esc(fmtLong(secs))}` : ""}${size}`;
+}
+
+/* ---------------------------------------------------------------- enqueue */
+function barOptions(over = {}) {
+  const s = S.settings;
+  return Object.assign({ mode: s.mode, video_quality: s.video_quality, video_container: s.video_container,
+    audio_format: s.audio_format, audio_quality: s.audio_quality }, over);
+}
+async function enqueue(entries, over = {}, formatId) {
+  const items = entries.filter((e) => e.kind === "video").map((e) => ({
+    url: e.url, title: e.title, thumb: e.thumb, channel: e.channel, duration: e.duration, format_id: formatId || null,
+  }));
+  if (!items.length) return;
+  try {
+    const r = await api("download", { items, options: barOptions(over), group: S.group || S.title });
+    const audio = (over.mode || S.settings.mode) === "audio";
+    const msg = r.added ? t(audio ? "Added {n} audio downloads" : "Added {n} video downloads", { n: r.added }) +
+      (r.skipped ? " " + t("({n} already in the list)", { n: r.skipped }) : "") : t("Already in the download list");
+    toast(msg, r.added ? "ok" : "");
+    pollJobs();
+  } catch (e) { toast(e.message, "bad"); }
+}
+$("#dlSel").addEventListener("click", () => {
+  enqueue(S.entries.filter((e) => S.sel.has(e.id)));
+  S.sel.clear(); refreshSelClasses();
+});
+$("#dlShown").addEventListener("click", () => {
+  const list = selectable();
+  if (list.length > 25 && !confirmInline(t("Download all {n} shown items?", { n: list.length }))) return;
+  enqueue(list);
+});
+let confirmArmed = 0;
+function confirmInline(msg) {
+  // two-click confirmation (avoids blocking browser dialogs)
+  if (Date.now() - confirmArmed < 4000) { confirmArmed = 0; return true; }
+  confirmArmed = Date.now();
+  toast(msg + " " + t("Click again to confirm."));
+  return false;
+}
+
+$("#exportBtn").addEventListener("click", () => {
+  const rows = [[t("Title"), t("Channel"), t("Date"), t("Duration"), t("Views"), "URL"]].concat(
+    S.shown.map((e) => [e.title, e.channel, fmtDate(e.date), fmtDur(e.duration), e.views || "", e.url]));
+  const csv = "﻿" + rows.map((r) => r.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(",")).join("\r\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = (S.title || "list").replace(/[\\/:*?"<>|]+/g, "_").slice(0, 80) + ".csv";
+  a.click();
+});
+
+/* ---------------------------------------------------------------- quality picker */
+async function openQualities(e) {
+  const m = $("#fmtModal"), body = $("#fmtBody");
+  m.classList.remove("hidden");
+  body.innerHTML = `<div class="loadmore"><span class="spin"></span> ${esc(t("Checking available qualities..."))}</div>`;
+  let f;
+  try { f = await api("formats", { url: e.url }); } catch (err) { body.innerHTML = `<p class="jerr">${esc(err.message)}</p>`; return; }
+  const cont = S.settings.video_container || "mp4";
+  const seen = new Set();
+  const vrows = f.video.filter((v) => { const k = `${v.height}|${v.vcodec}|${v.fps}`; if (seen.has(k)) return false; seen.add(k); return true; }).map((v) => `
+    <tr><td class="res">${v.height ? v.height + "p" : esc(v.note || v.id)}${v.fps > 30 ? ` <span class="tag">${Math.round(v.fps)} fps</span>` : ""}${v.vcodec === "h264" ? `<span class="tag good">${esc(t("plays everywhere"))}</span>` : ""}</td>
+    <td>${esc(v.vcodec)}${v.has_audio ? " + " + esc(t("audio")) : ""}</td><td>${esc(v.ext)}${v.proto && v.proto.startsWith("m3u8") ? `<span class="tag">${esc(t("stream"))}</span>` : ""}</td>
+    <td>${v.size_total ? "≈ " + fmtBytes(v.size_total) : ""}</td>
+    <td><button class="btn sm primary" data-fid="${esc(v.id)}" data-mode="video">${esc(t("Download {fmt}", { fmt: cont.toUpperCase() }))}</button></td></tr>`).join("");
+  const af = S.settings.audio_format === "original" ? "mp3" : S.settings.audio_format;
+  const arows = f.audio.map((a) => `
+    <tr><td class="res">${a.abr ? Math.round(a.abr) + " kbps" : esc(a.note || a.id)}${a.lang ? `<span class="tag">${esc(a.lang)}</span>` : ""}</td>
+    <td>${esc(a.acodec)}</td><td>${esc(a.ext)}</td><td>${a.size ? "≈ " + fmtBytes(a.size) : ""}</td>
+    <td><button class="btn sm" data-fid="${esc(a.id)}" data-mode="audio" data-af="original">${esc(t("Keep .{ext}", { ext: a.ext }))}</button>
+        <button class="btn sm primary" data-fid="${esc(a.id)}" data-mode="audio" data-af="${esc(af)}">${esc(t("To {fmt}", { fmt: af.toUpperCase() }))}</button></td></tr>`).join("");
+  body.innerHTML = `
+    <div class="fhead">${f.thumb ? `<img src="${esc(f.thumb)}" alt="">` : ""}
+      <div><h3>${esc(f.title)}</h3><div class="meta">${esc(f.channel || "")} &middot; ${fmtDur(f.duration)} ${f.date ? "&middot; " + fmtDate(f.date) : ""}</div>
+      <p class="muted small">${esc(t("The best audio is added to any video quality you pick. Sizes are estimates. The output file type comes from the bar at the bottom (now {fmt}).", { fmt: cont.toUpperCase() }))}</p></div></div>
+    <div class="ftitle">${ICON.video}<h4>${esc(t("Video qualities"))}</h4></div>
+    ${vrows ? `<table class="ftable"><tr><th>${esc(t("Quality"))}</th><th>${esc(t("Codec"))}</th><th>${esc(t("Source"))}</th><th>${esc(t("Size"))}</th><th></th></tr>${vrows}</table>` : `<p class="muted">${esc(t("No separate video qualities."))}</p>`}
+    <div class="ftitle">${ICON.audio}<h4>${esc(t("Audio only"))}</h4></div>
+    ${arows ? `<table class="ftable"><tr><th>${esc(t("Bitrate"))}</th><th>${esc(t("Codec"))}</th><th>${esc(t("Source"))}</th><th>${esc(t("Size"))}</th><th></th></tr>${arows}</table>` : `<p class="muted">${esc(t("No separate audio streams."))}</p>`}`;
+  body.onclick = (ev) => {
+    const b = ev.target.closest("[data-fid]"); if (!b) return;
+    const over = { mode: b.dataset.mode };
+    if (b.dataset.af) over.audio_format = b.dataset.af;
+    enqueue([e], over, b.dataset.fid);
+  };
+}
+$("#fmtModal").addEventListener("click", (ev) => {
+  if (ev.target.id === "fmtModal" || ev.target.closest("[data-close]")) $("#fmtModal").classList.add("hidden");
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("#fmtModal").classList.add("hidden"); });
+
+/* ---------------------------------------------------------------- downloads view */
+const STATUS_LABEL = { queued: "Waiting", running: "Downloading", done: "Done", skipped: "Skipped", error: "Failed", canceled: "Canceled", paused: "Paused" };
+function jobFmt(j) {
+  const o = j.opts || {};
+  if (o.mode === "audio") {
+    const f = (o.audio_format || "mp3").toUpperCase();
+    return `${f === "ORIGINAL" ? t("Original audio") : f} · ${o.audio_quality === "0" || o.audio_quality === 0 ? t("best") : o.audio_quality + " kbps"}`;
+  }
+  return `${(o.video_container || "mp4").toUpperCase()} · ${j.format_id ? t("chosen quality") : o.video_quality === "best" ? t("best") : o.video_quality + "p"}`;
+}
+function jobRow(j) {
+  const el = document.createElement("div");
+  el.className = "job"; el.dataset.id = j.id;
+  el.innerHTML = `<img alt="" referrerpolicy="no-referrer"><div class="jmain"><div class="jtitle"></div>
+    <div class="jsub"><span class="tag"></span><span class="st"></span><span class="jinfo"></span><span class="jgroup"></span></div>
+    <div class="bar"><i></i></div><div class="jerr hidden"></div></div><div class="jacts"></div>`;
+  return el;
+}
+function jobActs(j) {
+  const b = (a, label, cls = "btn sm ghost") => `<button class="${cls}" data-jact="${a}">${esc(t(label))}</button>`;
+  switch (j.status) {
+    case "running": return b("pause", "Pause") + b("cancel", "Cancel");
+    case "queued": return b("pause", "Pause") + b("cancel", "Remove");
+    case "paused": return b("resume", "Resume", "btn sm") + b("remove", "Remove");
+    case "error": return b("retry", "Retry", "btn sm") + b("remove", "Remove");
+    case "canceled": return b("retry", "Retry", "btn sm") + b("remove", "Remove");
+    default: return (j.filepath ? b("play", "Open", "btn sm") + b("show", "Show in folder") : "") + b("remove", "Remove");
+  }
+}
+let jobsT;
+async function pollJobs() {
+  clearTimeout(jobsT);
+  let data;
+  try { data = await api("jobs"); } catch { jobsT = setTimeout(pollJobs, 3000); return; }
+  const { jobs, stats } = data;
+  const active = (stats.running || 0) + (stats.queued || 0);
+  const badge = $("#dlBadge");
+  badge.textContent = active; badge.classList.toggle("hidden", !active);
+  const labels = [["running", "Downloading"], ["queued", "Waiting"], ["paused", "Paused"], ["done", "Done"], ["skipped", "Skipped"], ["error", "Failed"]];
+  $("#dlStats").innerHTML = labels.filter(([k]) => stats[k]).map(([k, l]) => `<span class="chip">${esc(t(l))}<b>${stats[k]}</b></span>`).join("") || `<span class="chip">${esc(t("Queue is empty"))}</span>`;
+  const box = $("#jobs");
+  $("#jobsEmpty").classList.toggle("hidden", jobs.length > 0);
+  const existing = new Map($$(".job", box).map((el) => [el.dataset.id, el]));
+  // newest first, but keep running at top
+  const order = { running: 0, queued: 1, paused: 2, error: 3, canceled: 4, done: 5, skipped: 5 };
+  jobs.sort((a, b) => (order[a.status] - order[b.status]) || (a.status === "queued" ? a.created - b.created : b.created - a.created));
+  let prev = null;
+  for (const j of jobs) {
+    let el = existing.get(j.id);
+    if (!el) el = jobRow(j);
+    existing.delete(j.id);
+    el.className = "job " + j.status;
+    const img = el.querySelector("img");
+    if (j.thumb && img.getAttribute("src") !== j.thumb) img.src = j.thumb;
+    el.querySelector(".jtitle").textContent = j.title;
+    el.querySelector(".jtitle").title = j.filepath || j.title;
+    el.querySelector(".tag").textContent = jobFmt(j);
+    const st = el.querySelector(".st"); st.className = "st " + j.status; st.textContent = t(STATUS_LABEL[j.status] || j.status);
+    let info = j.stage ? t(j.stage) : "";
+    if (j.status === "running" && j.total) {
+      info = `${info} · ${t("{p}% of {size}", { p: Math.round(j.percent), size: fmtBytes(j.total) })}${j.speed ? " · " + fmtBytes(j.speed) + "/s" : ""}${j.eta != null ? " · " + t("{t} left", { t: fmtDur(j.eta) }) : ""}`;
+    }
+    el.querySelector(".jinfo").textContent = info;
+    el.querySelector(".jgroup").textContent = j.group ? "📁 " + j.group : "";
+    el.querySelector(".bar > i").style.width = (["done", "skipped"].includes(j.status) ? 100 : j.percent || 0) + "%";
+    const err = el.querySelector(".jerr"); err.textContent = j.error || ""; err.classList.toggle("hidden", !j.error);
+    const acts = jobActs(j);
+    const ab = el.querySelector(".jacts"); if (ab.dataset.k !== j.status + !!j.filepath) { ab.innerHTML = acts; ab.dataset.k = j.status + !!j.filepath; }
+    el._job = j;
+    if (prev ? prev.nextSibling !== el : box.firstChild !== el) prev ? prev.after(el) : box.prepend(el);
+    prev = el;
+  }
+  existing.forEach((el) => el.remove());
+  const viewing = $("#view-downloads").classList.contains("on");
+  jobsT = setTimeout(pollJobs, active ? 900 : viewing ? 2000 : 4000);
+}
+$("#jobs").addEventListener("click", async (ev) => {
+  const b = ev.target.closest("[data-jact]"); if (!b) return;
+  const row = b.closest(".job"); const j = row._job; const a = b.dataset.jact;
+  if (a === "play") return api("open", { path: j.filepath });
+  if (a === "show") return api("open", { path: j.filepath, select: true });
+  await api("jobs/action", { ids: [j.id], action: a });
+  pollJobs();
+});
+$$("[data-all]").forEach((b) => b.addEventListener("click", async () => {
+  const a = b.dataset.all;
+  if (a === "cancel" && !confirmInline(t("Cancel every download?"))) return;
+  const ids = a === "clear" ? [] : "all";
+  await api("jobs/action", { ids, action: a });
+  pollJobs();
+}));
+$("#openFolder").addEventListener("click", () => api("open", {}));
+
+/* ---------------------------------------------------------------- settings buttons */
+$("#pickDir").addEventListener("click", async () => {
+  toast(t("A folder picker opened. It may be behind this window."));
+  const r = await api("pick-folder", {});
+  if (r.path) { S.settings = r.settings; applySettings(); refreshSystem(); toast(t("Download folder: {path}", { path: r.path }), "ok"); }
+});
+$("#openDir").addEventListener("click", () => api("open", {}));
+$("#updBtn").addEventListener("click", async (e) => {
+  const b = e.currentTarget; b.disabled = true; b.textContent = t("Updating...");
+  try {
+    const r = await api("update-ytdlp", {});
+    if (r.ok && r.restart) {
+      toast(r.output + ". " + t("Restarting the app..."), "ok");
+      await api("restart", {}); setTimeout(() => location.reload(), 4500);
+    } else if (r.ok) toast(r.output, "ok");
+    else toast(t("Update failed:") + " " + r.output, "bad");
+  } finally { b.disabled = false; b.textContent = t("Update"); }
+});
+$("#ffBtn").addEventListener("click", async (e) => {
+  const b = e.currentTarget; b.disabled = true; b.textContent = t("Downloading (about 140 MB)...");
+  const r = await api("install-ffmpeg", {}).catch((x) => ({ ok: false, output: x.message }));
+  toast(r.ok ? t("ffmpeg installed") : t("Install failed:") + " " + (r.output || ""), r.ok ? "ok" : "bad");
+  b.disabled = false; b.textContent = t("Repair"); refreshSystem();
+});
+$("#restartBtn").addEventListener("click", async () => { await api("restart", {}); toast(t("Restarting...")); setTimeout(() => location.reload(), 3500); });
+$("#quitBtn").addEventListener("click", async () => {
+  if (!confirmInline(t("Quit the app? Any downloads in progress will stop."))) return;
+  await api("quit", {}).catch(() => {});
+  document.body.innerHTML = `<div class="hero"><h1>${esc(t("Rit Downloader has stopped."))}</h1><p>${esc(t("You can close this window. Open it again from the desktop shortcut."))}</p></div>`;
+});
+
+/* ---------------------------------------------------------------- boot */
+async function boot() {
+  S.view = localStorage.getItem("rit.view") || "grid";
+  $$("#viewSeg button").forEach((x) => x.classList.toggle("on", x.dataset.v === S.view));
+  try { S.settings = await api("settings"); } catch (e) { toast(t("Can't reach the app server:") + " " + e.message, "bad"); }
+  applySettings();
+  if (S.settings.language !== I18N.lang) saveSetting({ language: I18N.lang }, true);
+  setKind("search");
+  refreshSystem(); setInterval(refreshSystem, 20000);
+  api("app-update").then((u) => {
+    if (!u.available) return;
+    const bar = $("#updateBanner");
+    bar.innerHTML = `${esc(t("A new version of Rit Downloader ({v}) is available.", { v: u.latest }))} <a href="${esc(u.url)}" target="_blank">${esc(t("Download it"))}</a>`;
+    bar.classList.remove("hidden");
+  }).catch(() => {});
+  pollJobs();
+  const p = new URLSearchParams(location.search);
+  if (p.get("url")) {
+    setKind("url"); $("#q").value = p.get("url");
+    history.replaceState(null, "", "/");
+    doSearch();
+  } else if (p.get("q")) {
+    $("#q").value = p.get("q"); history.replaceState(null, "", "/"); doSearch();
+  }
+}
+
+/* ---------------------------------------------------------------- language */
+$$("select.langsel").forEach((sel) => {
+  sel.innerHTML = langOptions();
+  sel.addEventListener("change", async () => {
+    await setLang(sel.value);
+    if (S.booted) saveSetting({ language: sel.value }, true);
+  });
+});
+document.addEventListener("langchange", () => {
+  if (!S.booted) return;
+  setKind(S.kind, false);
+  if (S.req && S.req.kind === "search") { S.title = t('Results for "{q}"', { q: S.req.query }); $("#rTitle").textContent = S.title; }
+  updateSelInfo();
+  if (S.entries.length) {
+    render(true);
+    $("#rStatus").textContent = S.loading ? t("{n} loaded", { n: S.entries.length.toLocaleString() }) : countText(S.entries.length);
+  }
+  $$("#jobs .jacts").forEach((el) => { el.dataset.k = ""; });
+  pollJobs();
+  refreshSystem();
+});
+
+/* ---------------------------------------------------------------- sign-in / app lock */
+const AUTH_ERR = {
+  bad_user: "Enter a username (up to 40 characters).",
+  short_password: "Use at least 4 characters for the password.",
+  invalid: "Wrong username or password.",
+  no_account: "No account exists yet.",
+  exists: "An account already exists on this computer.",
+};
+S.auth = {};
+
+async function showAuth(st) {
+  if (!st) { try { st = await api("auth/status"); } catch { st = { setup: false }; } }
+  S.auth = st;
+  if (st.authed) { $("#authScreen").classList.add("hidden"); return; }
+  $("#authScreen").classList.remove("hidden");
+  $("#setupForm").classList.toggle("hidden", !st.setup);
+  $("#loginForm").classList.toggle("hidden", !!st.setup);
+  $("#forgotText").classList.add("hidden");
+  $("#liPass").value = "";
+  setTimeout(() => (st.setup ? $("#suUser") : $("#liUser")).focus(), 50);
+}
+
+function afterSignIn(st) {
+  S.auth = st;
+  $("#authScreen").classList.add("hidden");
+  $("#acctUser").textContent = st.user || "";
+  $("#lockEnabled").checked = st.enabled !== false;
+  $("#autoLock").value = String(st.auto_lock || 0);
+  $("#lockBtn").classList.toggle("hidden", st.enabled === false);
+  if (!S.booted) { S.booted = true; boot(); } else { pollJobs(); refreshSystem(); }
+}
+
+$("#setupForm").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const err = $("#suErr"); err.textContent = "";
+  if ($("#suPass").value !== $("#suPass2").value) { err.textContent = t("The passwords do not match."); return; }
+  try {
+    await api("auth/setup", { user: $("#suUser").value, password: $("#suPass").value, hint: $("#suHint").value });
+    afterSignIn(await api("auth/status"));
+    toast(t("Account created. Welcome!"), "ok");
+  } catch (e) { err.textContent = t(AUTH_ERR[e.message] || e.message); }
+});
+
+$("#loginForm").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const err = $("#liErr"); err.textContent = "";
+  try {
+    await api("auth/login", { user: $("#liUser").value, password: $("#liPass").value, remember: $("#liRemember").checked });
+    afterSignIn(await api("auth/status"));
+  } catch (e) {
+    const d = e.data || {};
+    err.textContent = d.error === "wait" ? t("Too many attempts. Try again in {n} seconds.", { n: d.wait }) : t(AUTH_ERR[e.message] || e.message);
+  }
+});
+
+$("#forgotBtn").addEventListener("click", () => {
+  const st = S.auth || {};
+  const el = $("#forgotText");
+  el.textContent = (st.hint ? t("Your hint: {hint}", { hint: st.hint }) + " " : "") +
+    t("If you cannot remember it, quit the app and delete the file auth.json in {path}. Your downloads and settings are kept.", { path: st.data_dir || "" });
+  el.classList.remove("hidden");
+});
+
+$("#lockBtn").addEventListener("click", async () => {
+  await api("auth/logout", {}).catch(() => {});
+  showAuth();
+});
+
+$("#autoLock").addEventListener("change", async (ev) => {
+  await api("auth/autolock", { minutes: +ev.target.value });
+  toast(t("Saved"), "ok");
+});
+
+$("#lockEnabled").addEventListener("change", async (ev) => {
+  const want = ev.target.checked;
+  const current = $("#acCurrent").value;
+  if (!current) {
+    ev.target.checked = !want;
+    $("details.acct").open = true; $("#acCurrent").focus();
+    toast(t("Type your current password first."), "bad");
+    return;
+  }
+  try {
+    const r = await api("auth/update", { current, enabled: want });
+    $("#acCurrent").value = "";
+    $("#lockBtn").classList.toggle("hidden", !want);
+    S.auth = r.status;
+    toast(want ? t("The app will ask for your password.") : t("The app will open without a password."), "ok");
+  } catch (e) { ev.target.checked = !want; toast(t(AUTH_ERR[e.message] || e.message), "bad"); }
+});
+
+$("#acSave").addEventListener("click", async () => {
+  const body = { current: $("#acCurrent").value };
+  if ($("#acUser").value.trim()) body.user = $("#acUser").value.trim();
+  if ($("#acPass").value) {
+    if ($("#acPass").value !== $("#acPass2").value) { toast(t("The passwords do not match."), "bad"); return; }
+    body.password = $("#acPass").value;
+  }
+  if ($("#acHint").value.trim()) body.hint = $("#acHint").value.trim();
+  try {
+    const r = await api("auth/update", body);
+    ["#acCurrent", "#acUser", "#acPass", "#acPass2", "#acHint"].forEach((s) => { $(s).value = ""; });
+    $("#acctUser").textContent = r.status.user || "";
+    toast(t("Account updated"), "ok");
+  } catch (e) {
+    toast(e.message === "invalid" ? t("Your current password is wrong.") : t(AUTH_ERR[e.message] || e.message), "bad");
+  }
+});
+
+// Activity heartbeat (keeps auto-lock from firing while you use the app) + lock check
+let active = false;
+["mousedown", "keydown", "wheel", "touchstart"].forEach((ev) => document.addEventListener(ev, () => { active = true; }, { passive: true }));
+setInterval(async () => {
+  if (!S.booted || !$("#authScreen").classList.contains("hidden")) return;
+  try {
+    if (active) { active = false; await api("auth/touch", {}); }
+    const st = await api("auth/status");
+    if (!st.authed) showAuth(st);
+  } catch { /* server restarting */ }
+}, 45000);
+
+(async function start() {
+  let st = { setup: false, authed: false };
+  try { st = await api("auth/status"); } catch (e) { toast(t("Can't reach the app server:") + " " + e.message, "bad"); }
+  await setLang(detectLang(st.language), false);
+  if (st.authed) afterSignIn(st); else showAuth(st);
+})();

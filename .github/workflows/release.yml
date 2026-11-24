@@ -1,0 +1,112 @@
+# Builds Windows + macOS installers in the cloud and publishes them as a GitHub Release.
+# Trigger: push a tag like v1.0.1   (git tag v1.0.1 && git push origin v1.0.1)
+# Or run it manually from the Actions tab (builds only, no release).
+name: Build and release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  RIT_UPDATE_REPO: ${{ github.repository }}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+      - name: Version from tag
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then echo "RIT_VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV; fi
+      - name: Build
+        shell: pwsh
+        run: |
+          $v = $env:RIT_VERSION
+          if ($v) { ./packaging/windows/build.ps1 -Version $v -Python python } else { ./packaging/windows/build.ps1 -Python python }
+        # Optional code signing: add a repository secret and set RIT_SIGN_CMD here, e.g.
+        # env:
+        #   RIT_SIGN_CMD: signtool sign /fd sha256 /tr http://timestamp.digicert.com /td sha256 /f cert.pfx /p ${{ secrets.WIN_CERT_PASSWORD }} "{file}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: build/installer/*
+
+  mac:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14          # Apple Silicon (M1/M2/M3/M4)
+            target: mac-arm64
+          - runner: macos-15-intel    # Intel Macs
+            target: mac-x64
+    runs-on: ${{ matrix.runner }}
+    env:
+      HAS_MAC_CERT: ${{ secrets.MAC_CERT_P12 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Version from tag
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then echo "RIT_VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV; fi
+      - name: Import signing certificate (only if secrets are set)
+        if: env.HAS_MAC_CERT == 'true'
+        env:
+          MAC_CERT_P12: ${{ secrets.MAC_CERT_P12 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+        run: |
+          echo "$MAC_CERT_P12" | base64 --decode > cert.p12
+          security create-keychain -p ci build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p ci build.keychain
+          security import cert.p12 -k build.keychain -P "$MAC_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
+      - name: Build
+        env:
+          PYTHON: python
+          MAC_SIGN_IDENTITY: ${{ secrets.MAC_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: bash packaging/mac/build_mac.sh ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: build/installer/*.dmg
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, mac]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            ## Download
+            | Computer | File |
+            |---|---|
+            | Windows 10 / 11 (64-bit) | **RitDownloader-Setup-Windows.exe** (or the Portable .zip, no install) |
+            | Mac with Apple Silicon (M1, M2, M3, M4) | **RitDownloader-macOS-AppleSilicon.dmg** |
+            | Mac with Intel processor | **RitDownloader-macOS-Intel.dmg** |
+
+            Not sure which Mac you have? Apple menu > About This Mac: "Chip: Apple M..." means Apple Silicon.

@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rit Downloader</title>
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <img src="/static/icon.svg" alt="" width="28" height="28">
+    <span>Rit <b>Downloader</b></span>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button data-view="browse" class="on">Browse</button>
+    <button data-view="downloads">Downloads <span id="dlBadge" class="badge hidden"></span></button>
+    <button data-view="settings">Settings</button>
+  </nav>
+  <div class="sys" id="sysinfo" title="Download folder free space"></div>
+  <select class="langsel" id="langTop" title="Language" data-no-i18n></select>
+  <button class="btn ghost icon" id="lockBtn" title="Lock the app">
+    <svg class="ico" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+  </button>
+</header>
+
+<div id="updateBanner" class="banner hidden"></div>
+<main>
+<!-- ============================== BROWSE -->
+<section id="view-browse" class="view on">
+  <div class="search card">
+    <div class="seg" id="kindSeg" role="tablist">
+      <button data-kind="search" class="on">Videos</button>
+      <button data-kind="channels">Channels &amp; people</button>
+      <button data-kind="playlists">Playlists</button>
+      <button data-kind="url">Paste a link</button>
+    </div>
+    <div class="searchrow">
+      <select id="platform" title="Where to search">
+        <option value="youtube">YouTube</option>
+        <option value="youtube_new">YouTube, newest first</option>
+        <option value="soundcloud">SoundCloud</option>
+        <option value="bilibili">Bilibili</option>
+        <option value="niconico">Niconico</option>
+      </select>
+      <div class="qwrap">
+        <svg class="ico" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="q" placeholder="Search for a preacher, a topic or a title" autocomplete="off" spellcheck="false">
+      </div>
+      <select id="limit" title="How many results">
+        <option value="20">20 results</option>
+        <option value="50" selected>50 results</option>
+        <option value="100">100 results</option>
+        <option value="250">250 results</option>
+        <option value="500">500 results</option>
+      </select>
+      <button id="go" class="btn primary">Search</button>
+    </div>
+    <div id="urlOpts" class="urlopts hidden">
+      <span class="muted">On a YouTube channel, load:</span>
+      <label class="chk"><input type="checkbox" value="videos" checked> Videos</label>
+      <label class="chk"><input type="checkbox" value="streams" checked> Live streams / services</label>
+      <label class="chk"><input type="checkbox" value="shorts"> Shorts</label>
+      <span class="muted sep">Links work from YouTube, Facebook, Instagram, TikTok, X, Vimeo, SoundCloud, Rumble, Twitch, Dailymotion and 1,800+ other sites.</span>
+    </div>
+  </div>
+
+  <div id="resultsHead" class="reshead hidden">
+    <div class="rtitle">
+      <button id="backBtn" class="btn ghost icon hidden" title="Back to previous results">
+        <svg class="ico" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <h2 id="rTitle"></h2>
+      <span id="rStatus" class="pill"></span>
+      <button id="stopLoad" class="btn ghost sm hidden">Stop loading</button>
+    </div>
+    <div class="tools">
+      <div class="qwrap sm">
+        <svg class="ico" viewBox="0 0 24 24"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>
+        <input id="filter" placeholder="Filter: words in title (e.g. faith 2025)">
+      </div>
+      <select id="durFilter" title="Length">
+        <option value="">Any length</option>
+        <option value="0-240">Under 4 min</option>
+        <option value="240-1200">4 to 20 min</option>
+        <option value="1200-3600">20 to 60 min</option>
+        <option value="3600-">Over 1 hour</option>
+        <option value="7200-">Over 2 hours</option>
+      </select>
+      <select id="sort" title="Sort">
+        <option value="">Original order</option>
+        <option value="new">Newest first</option>
+        <option value="old">Oldest first</option>
+        <option value="long">Longest first</option>
+        <option value="short">Shortest first</option>
+        <option value="views">Most viewed</option>
+        <option value="az">Title A to Z</option>
+      </select>
+      <button id="selAll" class="btn sm">Select all shown</button>
+      <button id="selNone" class="btn ghost sm">Clear</button>
+      <button id="exportBtn" class="btn ghost sm" title="Save this list as a spreadsheet (CSV)">Export list</button>
+      <div class="seg sm" id="viewSeg">
+        <button data-v="grid" class="on" title="Grid"><svg class="ico" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></button>
+        <button data-v="list" title="List"><svg class="ico" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
+      </div>
+    </div>
+  </div>
+
+  <div id="results" class="grid"></div>
+  <div id="loadingMore" class="loadmore hidden"><span class="spin"></span> <span id="loadingText">Loading...</span></div>
+
+  <div id="hero" class="hero">
+    <h1>Find it, pick it, keep it.</h1>
+    <p>Search for a preacher or a channel and load every sermon they have published. Then download one, a few, or all of them, as video or audio, in the quality you want.</p>
+    <div class="steps">
+      <div class="step"><b>1</b><div><h4>Find the person</h4><p data-i18n-html>Choose <em>Channels &amp; people</em>, type a name, then click <em>Load all videos</em> on their channel.</p></div></div>
+      <div class="step"><b>2</b><div><h4>Narrow it down</h4><p>Filter by words in the title or by length (sermons are often over 1 hour), then sort by date.</p></div></div>
+      <div class="step"><b>3</b><div><h4>Download in bulk</h4><p>Select all, or Shift+click to select a range. Choose MP3 or MP4 and a quality, then click Download.</p></div></div>
+    </div>
+    <p data-i18n-html class="muted small">Tip: you can paste a link to a playlist, a channel or a single video from almost any site in <em>Paste a link</em>.</p>
+  </div>
+</section>
+
+<!-- ============================== DOWNLOADS -->
+<section id="view-downloads" class="view">
+  <div class="dlhead">
+    <div class="chips" id="dlStats"></div>
+    <div class="tools">
+      <button class="btn sm" data-all="pause">Pause all</button>
+      <button class="btn sm" data-all="resume">Resume all</button>
+      <button class="btn sm" data-all="retry">Retry failed</button>
+      <button class="btn ghost sm" data-all="clear">Clear finished</button>
+      <button class="btn ghost sm" data-all="cancel">Cancel all</button>
+      <button class="btn primary sm" id="openFolder">Open download folder</button>
+    </div>
+  </div>
+  <div id="jobs" class="jobs"></div>
+  <div id="jobsEmpty" class="hero small">
+    <h2>No downloads yet</h2>
+    <p>Items you download from Browse will show up here with their progress. Downloads keep running if you close this window.</p>
+  </div>
+</section>
+
+<!-- ============================== SETTINGS -->
+<section id="view-settings" class="view">
+  <div class="settings">
+    <div class="card set">
+      <h3>Where files are saved</h3>
+      <div class="pathrow">
+        <code id="dlDir"></code>
+        <button class="btn sm" id="pickDir">Change</button>
+        <button class="btn ghost sm" id="openDir">Open</button>
+      </div>
+      <div class="drives" id="drives"></div>
+      <label class="field">Folders
+        <select data-set="organize">
+          <option value="group">One folder for each channel, search or playlist (recommended)</option>
+          <option value="channel">One folder for each uploader</option>
+          <option value="none">Everything in one folder</option>
+        </select>
+      </label>
+      <label class="toggle"><input type="checkbox" data-set="date_prefix"><span></span> Start file names with the upload date (2025-03-09 - Title.mp3), so files sort by date</label>
+      <label class="toggle"><input type="checkbox" data-set="archive"><span></span> Skip videos I already downloaded. Run the same channel again later to get only the new ones.</label>
+    </div>
+
+    <div class="card set">
+      <h3>Video</h3>
+      <label class="field">Codec
+        <select data-set="video_codec">
+          <option value="compatible">Most compatible: H.264, plays on any PC, phone or TV</option>
+          <option value="efficient">Most efficient: AV1 or VP9, smaller files that need newer devices</option>
+        </select>
+      </label>
+      <p class="note">4K and 1440p are only available in VP9 or AV1. "Most compatible" still downloads them when you choose those qualities.</p>
+      <label class="toggle"><input type="checkbox" data-set="embed_chapters"><span></span> Add chapter markers</label>
+      <label class="toggle"><input type="checkbox" data-set="subtitles"><span></span> Download subtitles (added to the video, also saved as a separate file)</label>
+      <div class="inline">
+        <label class="field sm">Languages <input data-set="sub_langs" placeholder="en.*,fr"></label>
+        <label class="toggle"><input type="checkbox" data-set="auto_subs"><span></span> Include auto-generated subtitles</label>
+      </div>
+    </div>
+
+    <div class="card set">
+      <h3>Audio and tags</h3>
+      <label class="toggle"><input type="checkbox" data-set="embed_thumbnail"><span></span> Add the thumbnail as cover art (MP3, M4A, FLAC, Opus, MP4, MKV)</label>
+      <label class="toggle"><input type="checkbox" data-set="embed_metadata"><span></span> Write the title, artist, date and description into the file</label>
+      <p class="note">For sermons and other speech, MP3 at 96 to 128 kbps sounds clear and uses about 1 MB per minute. Use 320 kbps or FLAC for music.</p>
+    </div>
+
+    <div class="card set">
+      <h3>Speed</h3>
+      <label class="field">Downloads at the same time
+        <select data-set="concurrency" data-num>
+          <option value="1">1</option><option value="2">2 (recommended)</option><option value="3">3</option><option value="4">4</option><option value="5">5</option>
+        </select>
+      </label>
+      <label class="field">Connections per download
+        <select data-set="fragments" data-num>
+          <option value="1">1</option><option value="2">2</option><option value="4">4 (recommended)</option><option value="8">8</option>
+        </select>
+      </label>
+      <label class="field">Speed limit
+        <select data-set="rate_limit">
+          <option value="">No limit</option><option value="500K">500 KB/s</option><option value="1M">1 MB/s</option><option value="2M">2 MB/s</option><option value="5M">5 MB/s</option>
+        </select>
+      </label>
+      <label class="field">Pause between downloads (helps avoid YouTube blocking large batches)
+        <select data-set="sleep_interval" data-num>
+          <option value="0">None</option><option value="1">1 second</option><option value="3">3 seconds</option><option value="5">5 seconds</option><option value="10">10 seconds</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="card set">
+      <h3>Sign-in</h3>
+      <label class="field">Use cookies from a browser
+        <select data-set="cookies_browser">
+          <option value="">Off</option><option value="edge">Microsoft Edge</option><option value="chrome">Google Chrome</option><option value="firefox">Firefox</option><option value="brave">Brave</option><option value="opera">Opera</option>
+        </select>
+      </label>
+      <p class="note">Turn this on only for age-restricted, members-only or private videos, or if YouTube asks you to "confirm you're not a bot". Sign in to the site in that browser first. On Windows, Chrome and Edge must be fully closed while you use this. On a Mac, you may be asked to allow access to the browser's keychain.</p>
+    </div>
+
+    <div class="card set" id="accountCard">
+      <h3>Account and security</h3>
+      <div class="kv"><span>Signed in as</span><b id="acctUser" data-no-i18n></b></div>
+      <label class="toggle"><input type="checkbox" id="lockEnabled"><span></span> Ask for my password when the app opens</label>
+      <label class="field">Lock automatically when not used for
+        <select id="autoLock">
+          <option value="0">Never</option><option value="5">5 minutes</option><option value="15">15 minutes</option>
+          <option value="30">30 minutes</option><option value="60">1 hour</option>
+        </select>
+      </label>
+      <details class="acct">
+        <summary>Change username or password</summary>
+        <div class="acctform">
+          <label class="field">Current password <input type="password" id="acCurrent" autocomplete="current-password"></label>
+          <label class="field">New username (optional) <input id="acUser" autocomplete="username"></label>
+          <label class="field">New password (optional) <input type="password" id="acPass" autocomplete="new-password"></label>
+          <label class="field">Repeat new password <input type="password" id="acPass2" autocomplete="new-password"></label>
+          <label class="field">Password hint (optional) <input id="acHint"></label>
+          <button class="btn primary sm" id="acSave">Save changes</button>
+        </div>
+      </details>
+      <p class="note">The password keeps other people who use this computer out of the app. Downloads keep running while the app is locked.</p>
+    </div>
+
+    <div class="card set">
+      <h3>App</h3>
+      <label class="field">Language
+        <select class="langsel" id="langSet" data-no-i18n></select>
+      </label>
+      <label class="field">Theme
+        <select data-set="theme"><option value="dark">Dark</option><option value="light">Light</option></select>
+      </label>
+      <div class="kv"><span>Rit Downloader version</span><b id="appv"></b></div>
+      <div class="kv"><span>Download engine (yt-dlp)</span><b id="ytv"></b><button class="btn sm" id="updBtn">Update</button></div>
+      <div class="kv"><span>Video tools (ffmpeg)</span><b id="ffv"></b><button class="btn sm hidden" id="ffBtn">Repair</button></div>
+      <p data-i18n-html class="note">If downloads start failing, click <b>Update</b>. Sites change often and the engine updates to keep up.</p>
+      <div class="inline">
+        <button class="btn ghost sm" id="restartBtn">Restart app</button>
+        <button class="btn danger sm" id="quitBtn">Quit app (stops downloads)</button>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<!-- ============================== ACTION BAR -->
+<footer class="actionbar" id="actionbar">
+  <div class="seg" id="modeSeg">
+    <button data-mode="video"><svg class="ico" viewBox="0 0 24 24"><rect x="2" y="5" width="15" height="14" rx="2"/><path d="m17 10 5-3v10l-5-3z"/></svg> Video</button>
+    <button data-mode="audio"><svg class="ico" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg> Audio</button>
+  </div>
+  <div class="opts" id="videoOpts">
+    <select data-set="video_quality" title="Video quality">
+      <option value="best">Best available</option>
+      <option value="2160">4K (2160p)</option>
+      <option value="1440">1440p</option>
+      <option value="1080">Full HD (1080p)</option>
+      <option value="720">HD (720p)</option>
+      <option value="480">480p</option>
+      <option value="360">360p (data saver)</option>
+      <option value="240">240p</option>
+      <option value="144">144p</option>
+    </select>
+    <select data-set="video_container" title="File type">
+      <option value="mp4">MP4</option>
+      <option value="mkv">MKV</option>
+      <option value="webm">WebM</option>
+      <option value="mov">MOV (converted, slower)</option>
+      <option value="avi">AVI (converted, slower)</option>
+    </select>
+  </div>
+  <div class="opts hidden" id="audioOpts">
+    <select data-set="audio_format" title="Audio format">
+      <option value="mp3">MP3</option>
+      <option value="m4a">M4A (AAC)</option>
+      <option value="opus">Opus</option>
+      <option value="ogg">OGG Vorbis</option>
+      <option value="flac">FLAC (lossless container)</option>
+      <option value="wav">WAV (uncompressed)</option>
+      <option value="aac">AAC</option>
+      <option value="original">Original (no conversion)</option>
+    </select>
+    <select data-set="audio_quality" title="Audio quality">
+      <option value="0">Best quality</option>
+      <option value="320">320 kbps</option>
+      <option value="256">256 kbps</option>
+      <option value="192">192 kbps</option>
+      <option value="128">128 kbps (good for sermons)</option>
+      <option value="96">96 kbps</option>
+      <option value="64">64 kbps (smallest)</option>
+    </select>
+  </div>
+  <div class="selinfo" id="selInfo">Nothing selected</div>
+  <div class="actions">
+    <button class="btn" id="dlShown">Download all shown</button>
+    <button class="btn primary" id="dlSel" disabled>Download selected</button>
+  </div>
+</footer>
+
+<!-- ============================== QUALITY MODAL -->
+<div class="modal hidden" id="fmtModal">
+  <div class="modal-card">
+    <button class="btn ghost icon close" data-close title="Close"><svg class="ico" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+    <div id="fmtBody"></div>
+  </div>
+</div>
+
+<!-- ============================== SIGN-IN / FIRST-RUN -->
+<div class="auth hidden" id="authScreen">
+  <div class="auth-card">
+    <select class="langsel auth-lang" id="langAuth" title="Language" data-no-i18n></select>
+    <img src="/static/icon.svg" alt="" width="56" height="56">
+    <h1 data-no-i18n>Rit <b>Downloader</b></h1>
+
+    <form id="setupForm" class="hidden" autocomplete="on">
+      <h2>Create your account</h2>
+      <p class="muted">Choose a username and password for this computer. You will use them every time you open the app.</p>
+      <label class="field">Username <input id="suUser" autocomplete="username" required maxlength="40"></label>
+      <label class="field">Password <input type="password" id="suPass" autocomplete="new-password" required></label>
+      <label class="field">Repeat password <input type="password" id="suPass2" autocomplete="new-password" required></label>
+      <label class="field">Password hint (optional) <input id="suHint" maxlength="80" placeholder="Something only you will understand"></label>
+      <div class="auth-err" id="suErr"></div>
+      <button class="btn primary wide" type="submit">Create account</button>
+      <p class="muted small">Your password stays on this computer. It is never sent anywhere.</p>
+    </form>
+
+    <form id="loginForm" class="hidden" autocomplete="on">
+      <h2>Sign in</h2>
+      <label class="field">Username <input id="liUser" autocomplete="username" required></label>
+      <label class="field">Password <input type="password" id="liPass" autocomplete="current-password" required></label>
+      <label class="chk"><input type="checkbox" id="liRemember"> Keep me signed in on this computer</label>
+      <div class="auth-err" id="liErr"></div>
+      <button class="btn primary wide" type="submit">Sign in</button>
+      <button class="linkbtn" type="button" id="forgotBtn">Forgot your password?</button>
+      <p class="muted small hidden" id="forgotText" data-no-i18n></p>
+    </form>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+<script src="/static/i18n.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
