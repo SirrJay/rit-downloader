@@ -10,6 +10,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+import library
 import paths
 from paths import DATA, IS_MAC, IS_WIN
 
@@ -127,9 +128,11 @@ DEFAULTS = {
     "subtitles": False,
     "auto_subs": False,
     "sub_langs": "en.*",
-    "organize": "group",
+    "organize": "channel",
     "date_prefix": True,
     "archive": True,
+    "redownload_deleted": False,
+    "sync_hours": 12,
     "cookies_browser": "",
     "search_limit": 50,
     "theme": "dark",
@@ -187,6 +190,13 @@ def base_args(s):
     return a
 
 
+def file_name_template(s):
+    name = "%(title).150B [%(id)s].%(ext)s"
+    if s.get("date_prefix"):
+        name = "%(upload_date>%Y-%m-%d&{} - |)s" + name
+    return name
+
+
 def build_download_args(s, group=None, format_id=None):
     a = base_args(s)
     a += ["--no-playlist", "--retries", "10", "--fragment-retries", "10",
@@ -194,19 +204,8 @@ def build_download_args(s, group=None, format_id=None):
     if s.get("rate_limit"):
         a += ["--limit-rate", str(s["rate_limit"])]
 
-    # ---- output location / naming
-    sub = ""
-    org = s.get("organize")
-    if org == "channel":
-        sub = "%(channel,uploader|Unknown)s/"
-    elif org == "group" and group:
-        sub = sanitize_filename(group).replace("%", "%%")[:80].strip() + "/"
-    name = "%(title).150B [%(id)s].%(ext)s"
-    if s.get("date_prefix"):
-        name = "%(upload_date>%Y-%m-%d&{} - |)s" + name
-    a += ["-P", s["download_dir"], "-o", sub + name]
-    if s.get("archive"):
-        a += ["--download-archive", os.path.join(s["download_dir"], f".rit-archive-{s.get('mode') or 'video'}.txt")]
+    # ---- output location / naming (the folder is chosen per video in Manager._run)
+    a += ["-P", s["download_dir"], "-o", file_name_template(s)]
 
     meta_ok = True
     if s.get("mode") == "audio":
@@ -326,6 +325,7 @@ def normalize(e, tab=None):
         "title": title,
         "duration": e.get("duration"),
         "channel": e.get("channel") or e.get("uploader") or "",
+        "channel_id": e.get("channel_id") or (e.get("uploader_id") if str(e.get("uploader_id") or "").startswith("UC") else None),
         "channel_url": e.get("channel_url") or e.get("uploader_url") or "",
         "views": e.get("view_count"),
         "date": _date(e),
@@ -357,6 +357,38 @@ def channel_base(url):
     return u
 
 
+def _avatar(info):
+    ths = [t for t in (info.get("thumbnails") or []) if t.get("url")]
+    sq = [t for t in ths if t.get("id") == "avatar_uncropped" or (t.get("width") and t.get("width") == t.get("height"))]
+    t = (sq or [None])[-1]
+    if not t:
+        return ""
+    u = t["url"]
+    return "https:" + u if u.startswith("//") else u
+
+
+def annotate(entries):
+    """Mark entries the library already has: e['dl'] = {'audio': bool, 'video': bool}."""
+    vids = [e.get("vid") for e in entries if e.get("kind") == "video" and e.get("vid")]
+    if not vids:
+        return entries
+    st = library.status_map(vids, settings.get().get("redownload_deleted"))
+    for e in entries:
+        if e.get("kind") == "video":
+            e["dl"] = st.get(e.get("vid"), {"audio": False, "video": False})
+    return entries
+
+
+def channel_info(ch):
+    """Browse-header info for a channel being listed, merged with what the library knows."""
+    known = library.get_channel(ch["id"]) or library.get_channel("name:" + (ch.get("name") or "")) or {}
+    if known and (not known.get("url") or known["channel_id"].startswith("name:")):
+        library.upsert_channel(ch["id"], ch["name"], url=ch["url"], thumb=ch.get("thumb") or None)
+        known = library.get_channel(ch["id"]) or known
+    return {**ch, "tracked": bool(known.get("tracked")), "auto": bool(known.get("auto")),
+            "folder": known.get("folder"), "key": ch["id"]}
+
+
 class Browse:
     def __init__(self, req):
         self.id = uuid.uuid4().hex[:10]
@@ -369,6 +401,7 @@ class Browse:
         self.cancel = False
         self.status = "Starting..."
         self.max = 0
+        self.channel = None      # set when listing a channel: {id, name, url, thumb}
         self.lock = threading.Lock()
 
     def add(self, item):
@@ -380,9 +413,14 @@ class Browse:
 
     def snapshot(self, since):
         with self.lock:
-            return {"id": self.id, "title": self.title, "entries": self.entries[since:],
+            new = self.entries[since:]
+            snap = {"id": self.id, "title": self.title, "entries": new,
                     "total": len(self.entries), "done": self.done, "error": self.error,
                     "status": self.status}
+        annotate(new)
+        if self.channel:
+            snap["channel"] = channel_info(self.channel)
+        return snap
 
 
 browses = {}
@@ -408,6 +446,9 @@ def _iter_entries(b, ydl, url, tab=None, depth=0):
         hops += 1
     if not b.title:
         b.title = info.get("title") or info.get("channel") or ""
+    if b.req.get("kind") == "url" and info.get("channel_id") and not b.channel and is_yt_channel(url):
+        b.channel = {"id": info.get("channel_id"), "name": info.get("channel") or info.get("uploader") or "",
+                     "url": channel_base(info.get("channel_url") or url), "thumb": _avatar(info)}
     if info.get("_type") in ("playlist", "multi_video"):
         for e in info.get("entries") or []:
             if b.cancel:
@@ -417,8 +458,10 @@ def _iter_entries(b, ydl, url, tab=None, depth=0):
             if b.max and len(b.entries) >= b.max:
                 return
             item = normalize(e, tab)
-            if not item["channel"] and info.get("_type") == "playlist" and b.req.get("kind") == "url":
-                item["channel"] = info.get("channel") or info.get("uploader") or ""
+            if info.get("_type") == "playlist" and b.req.get("kind") == "url" and b.channel:
+                item["channel"] = item["channel"] or b.channel["name"]
+                item["channel_id"] = item["channel_id"] or b.channel["id"]
+                item["channel_url"] = item["channel_url"] or b.channel["url"]
             # A channel's home page lists its tabs as nested playlists -> expand once
             if item["kind"] != "video" and depth == 0 and b.req.get("kind") == "url" \
                     and any(item["url"].rstrip("/").endswith(t) for t in YT_TABS.values()):
@@ -560,7 +603,7 @@ def get_formats(url):
 class Job:
     FIELDS = ("id", "url", "title", "thumb", "group", "format_id", "opts", "status", "percent",
               "speed", "eta", "downloaded", "total", "stage", "filepath", "error", "created",
-              "finished", "channel", "duration")
+              "finished", "channel", "duration", "vid", "site", "channel_id", "force")
 
     def __init__(self, url, title="", thumb="", group=None, format_id=None, opts=None,
                  channel="", duration=None):
@@ -577,6 +620,8 @@ class Job:
         self.created = time.time()
         self.finished = None
         self.stop_reason = None  # 'cancel' | 'pause'
+        self.vid = self.site = self.channel_id = None
+        self.force = False
 
     def to_dict(self):
         return {k: getattr(self, k) for k in self.FIELDS}
@@ -606,6 +651,7 @@ class JobLogger:
             self.job.stage = "Converting video..."
         elif "has already been downloaded" in msg:
             self.job.stage = "Already exists"
+            self.job.skipped = True
 
     info = debug
 
@@ -660,27 +706,44 @@ class Manager:
             self.cv.notify_all()
 
     # API --------------------------------------------------------------------
-    def add(self, items, opts_override=None, group=None):
+    def add(self, items, opts_override=None, group=None, force=False):
+        """Queue downloads. Videos already in the library (for this mode) are skipped unless force=True.
+        Returns {"added", "already" (in library), "queued" (already in the list)}."""
         s = settings.get()
         if opts_override:
             s.update(opts_override)
-        added = 0
+        mode = s.get("mode")
+        skip_known = s.get("archive", True) and not force
+        redl = s.get("redownload_deleted")
+        added = already = queued = 0
         with self.lock:
-            active = {(j.url, j.format_id, j.opts.get("mode")) for j in self.jobs
-                      if j.status in ("queued", "running", "paused")}
+            active = set()
+            for j in self.jobs:
+                if j.status in ("queued", "running", "paused"):
+                    active.add((j.url, j.format_id, j.opts.get("mode")))
+                    if j.vid:
+                        active.add((j.vid, j.opts.get("mode")))
             for it in items:
                 url = it.get("url")
                 if not url:
                     continue
-                key = (url, it.get("format_id"), s.get("mode"))
-                if key in active:
+                vid = it.get("vid")
+                if (url, it.get("format_id"), mode) in active or (vid and (vid, mode) in active):
+                    queued += 1
                     continue
-                active.add(key)
-                self.jobs.append(Job(url, it.get("title"), it.get("thumb"), it.get("group") or group,
-                                     it.get("format_id"), dict(s), it.get("channel", ""), it.get("duration")))
+                if skip_known and vid and library.is_downloaded(vid, mode, redl):
+                    already += 1
+                    continue
+                active.add((url, it.get("format_id"), mode))
+                if vid:
+                    active.add((vid, mode))
+                j = Job(url, it.get("title"), it.get("thumb"), it.get("group") or group,
+                        it.get("format_id"), dict(s), it.get("channel", ""), it.get("duration"))
+                j.vid, j.site, j.channel_id, j.force = vid, it.get("site"), it.get("channel_id"), bool(force)
+                self.jobs.append(j)
                 added += 1
         self.touch()
-        return added
+        return {"added": added, "already": already, "queued": queued}
 
     def list(self):
         with self.lock:
@@ -781,20 +844,61 @@ class Manager:
             sleep = float(s.get("sleep_interval") or 0)
             if sleep > 0:
                 opts["sleep_interval"] = sleep
+            mode = s.get("mode") or "video"
+            skip_known = s.get("archive", True) and not job.force
+            redl = s.get("redownload_deleted")
+            # 1) known id: skip without touching the network
+            if skip_known and job.vid:
+                have = library.is_downloaded(job.vid, mode, redl)
+                if have:
+                    job.filepath = have if isinstance(have, str) else job.filepath
+                    job.status, job.stage, job.percent = "skipped", "Already downloaded (skipped)", 100
+                    return
             with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(job.url, download=True)
+                # 2) identify the video (real id + channel), then decide skip / folder
+                job.stage = "Starting..."
+                info = ydl.extract_info(job.url, download=False, process=False)
+                hops = 0
+                while info and info.get("_type") == "url" and hops < 3:
+                    info = ydl.extract_info(info["url"], download=False, process=False, ie_key=info.get("ie_key"))
+                    hops += 1
+                if job.stop_reason:
+                    raise DownloadCancelled()
+                vid = info.get("id") or job.vid
+                job.vid = vid
+                job.site = info.get("extractor_key") or job.site
+                job.channel_id = info.get("channel_id") or job.channel_id
+                ch_name = info.get("channel") or info.get("uploader") or job.channel or ""
+                job.channel = ch_name
+                job.title = info.get("title") or job.title
+                if not job.thumb:
+                    job.thumb = info.get("thumbnail") or ""
+                if skip_known:
+                    have = library.is_downloaded(vid, mode, redl)
+                    if have:
+                        job.filepath = have if isinstance(have, str) else job.filepath
+                        job.status, job.stage, job.percent = "skipped", "Already downloaded (skipped)", 100
+                        return
+                folder = target_folder(s, job, ch_name)
+                os.makedirs(folder, exist_ok=True)
+                ydl.params["outtmpl"]["default"] = os.path.join(folder.replace("%", "%%"), file_name_template(s))
+                # 3) download
+                info = ydl.process_ie_result(info, download=True)
                 if info:
                     rd = info.get("requested_downloads") or []
                     if rd and rd[-1].get("filepath"):
                         job.filepath = rd[-1]["filepath"]
-                    job.title = info.get("title") or job.title
-                    job.channel = info.get("channel") or info.get("uploader") or job.channel
-                    if not job.thumb:
-                        job.thumb = info.get("thumbnail") or ""
             if job.stop_reason:
                 raise DownloadCancelled()
+            if job.filepath and os.path.isfile(job.filepath):
+                library.record(job.vid, mode, extractor=job.site, filepath=job.filepath, title=job.title,
+                               channel_id=job.channel_id, channel=job.channel,
+                               upload_date=(info or {}).get("upload_date"))
+                if job.channel_id or job.channel:
+                    library.upsert_channel(job.channel_id, job.channel,
+                                           url=(info or {}).get("channel_url") or (info or {}).get("uploader_url"))
             if job.skipped:
-                job.status, job.stage = "skipped", "Already downloaded before (skipped)"
+                job.status, job.stage = "skipped", "Already exists"
             else:
                 job.status, job.stage = "done", "Completed"
             job.percent = 100
@@ -821,7 +925,220 @@ class Manager:
             self.touch()
 
 
+def target_folder(s, job, channel_name):
+    """Where this video goes:
+    channel -> the channel's own folder (kept forever, even if the download folder changes)
+    group   -> one folder per search / playlist
+    none    -> the download folder itself"""
+    base = s["download_dir"]
+    org = s.get("organize") or "channel"
+    if org == "channel" and (job.channel_id or channel_name):
+        return library.channel_folder(job.channel_id, channel_name, base)
+    if org == "group" and job.group:
+        return os.path.join(base, library.safe_folder_name(job.group))
+    return base
+
+
 manager = Manager()
+
+
+# --------------------------------------------------------------------------- channel sync ("download new only")
+sync_state = {}          # channel key -> {"state": "checking"|"done"|"error", "new": n, "total": n, ...}
+_sync_lock = threading.Lock()
+
+
+def list_channel_videos(url, tabs=("videos", "streams")):
+    """Blocking flat listing of a channel's videos (fast: no per-video requests)."""
+    b = Browse({"kind": "url", "query": url, "tabs": list(tabs)})
+    _run_browse(b)
+    if b.error and not b.entries:
+        raise RuntimeError(b.error)
+    return b
+
+
+def resolve_channel(key):
+    """A channel known only by folder name (from a disk scan): look up its real id/address
+    from one of its downloaded videos."""
+    ch = library.get_channel(key)
+    if not ch or ch.get("url"):
+        return key
+    with library._lock:
+        rows = library._db().execute("SELECT video_id, extractor FROM downloads WHERE channel_id=? LIMIT 3",
+                                     (key,)).fetchall()
+    opts = ydl_opts_from_args(base_args(settings.get()) + ["--no-playlist"])
+    opts.update({"quiet": True, "no_warnings": True, "skip_download": True, "logger": _QuietLogger()})
+    for r in rows:
+        vid = r["video_id"]
+        if len(vid) != 11 or (r["extractor"] and r["extractor"] != "youtube"):
+            continue
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(f"https://www.youtube.com/watch?v={vid}", download=False, process=False)
+            if info.get("channel_id"):
+                return library.upsert_channel(info["channel_id"], ch.get("name") or info.get("channel"),
+                                              url=channel_base(info.get("channel_url") or ""))
+        except Exception:
+            continue
+    return key
+
+
+def sync_channel(key, download=True, opts=None):
+    """Find videos on the channel that are not in the library yet; optionally queue them."""
+    if key.startswith("name:"):
+        old = key
+        key = resolve_channel(key)
+        if key != old:
+            sync_state.pop(old, None)
+            sync_state[old] = {"state": "moved", "to": key}
+    ch = library.get_channel(key)
+    if not ch or not ch.get("url"):
+        sync_state[key] = {"state": "error", "error": "No address saved for this channel. Open it from Browse once."}
+        return sync_state[key]
+    with _sync_lock:
+        cur = sync_state.get(key, {})
+        if cur.get("state") == "checking" and not cur.get("pending"):
+            return cur                       # another check of this channel is already running
+        sync_state[key] = {"state": "checking", "started": time.time()}
+    try:
+        cur = settings.get()
+        o = dict(opts or ch.get("opts") or {})
+        mode = o.get("mode") or cur.get("mode")
+        b = list_channel_videos(ch["url"])
+        vids = [e for e in b.entries if e.get("kind") == "video" and e.get("vid")
+                and e.get("live") not in ("is_live", "is_upcoming")]
+        st = library.status_map([e["vid"] for e in vids], cur.get("redownload_deleted"))
+        new = [e for e in vids if not st.get(e["vid"], {}).get(mode)]
+        res = {"state": "done", "new": len(new), "total": len(vids), "queued": 0, "finished": time.time()}
+        if download and new:
+            if b.channel and b.channel.get("id") and key.startswith("name:"):
+                key = library.upsert_channel(b.channel["id"], b.channel["name"], url=b.channel["url"])
+            for e in new:
+                e["channel_id"] = e.get("channel_id") or (None if key.startswith("name:") else key)
+            r = manager.add([{**e, "group": ch.get("name")} for e in reversed(new)],   # oldest first
+                            {**o, "mode": mode} if o else {"mode": mode}, group=ch.get("name"))
+            res["queued"] = r["added"]
+        library.upsert_channel(None if key.startswith("name:") else key, ch.get("name"),
+                               last_sync=time.time(), new_count=0 if download else len(new),
+                               thumb=(b.channel or {}).get("thumb") or None)
+        sync_state[key] = res
+    except Exception as ex:
+        sync_state[key] = {"state": "error", "error": clean_error(ex), "finished": time.time()}
+    return sync_state[key]
+
+
+def start_sync(keys, download=True):
+    def run():
+        for k in keys:
+            sync_channel(k, download)
+    for k in keys:
+        if sync_state.get(k, {}).get("state") != "checking":
+            sync_state[k] = {"state": "checking", "started": time.time(), "pending": True}
+    threading.Thread(target=run, daemon=True).start()
+
+
+def _auto_sync_loop():
+    """Channels marked "Keep up to date" are checked every few hours; new videos are queued."""
+    time.sleep(90)
+    while True:
+        try:
+            hours = float(settings.get().get("sync_hours") or 12)
+            due = [c["channel_id"] for c in library.list_channels()
+                   if c.get("tracked") and c.get("auto") and time.time() - (c.get("last_sync") or 0) > hours * 3600]
+            for k in due:
+                sync_channel(k, download=True)
+        except Exception as ex:
+            print("auto sync:", ex, file=sys.stderr)
+        time.sleep(15 * 60)
+
+
+# --------------------------------------------------------------------------- library migration / scanning
+scan_state = {"state": "idle"}
+
+
+def scan_library(extra_roots=(), report_duplicates=True):
+    """Index files on disk (plus old skip lists and download history) into the library."""
+    if scan_state.get("state") == "scanning":
+        return
+    scan_state.clear()
+    scan_state.update({"state": "scanning", "found": 0, "started": time.time()})
+    try:
+        roots = [r for r in _clean_roots(known_roots() + list(extra_roots)) if os.path.isdir(r)]
+        imported = 0
+        for r in roots:
+            for mode in ("audio", "video"):
+                imported += library.import_archive(os.path.join(r, f".rit-archive-{mode}.txt"), mode)
+        # finished jobs from the download history
+        for j in manager.list():
+            if j.get("status") in ("done", "skipped") and j.get("filepath") and os.path.isfile(j["filepath"]):
+                m = library.ID_IN_NAME.search(os.path.basename(j["filepath"]))
+                if m:
+                    library.record(m.group(1), library.media_mode(j["filepath"]) or (j.get("opts") or {}).get("mode"),
+                                   filepath=j["filepath"], title=j.get("title"), channel=j.get("channel"),
+                                   source="history", replace=False)
+        found = added = 0
+        dupes = []
+        for r in roots:
+            res = library.scan_folder(r, progress=lambda n: scan_state.update(found=found + n))
+            found += res["found"]
+            added += res["added"]
+            dupes += res["duplicates"]
+        library.assign_folders_by_majority()
+        library.set_meta("roots", json.dumps(roots))
+        scan_state.update({"state": "done", "found": found, "added": added, "imported": imported,
+                           "duplicates": dupes, "roots": roots, "finished": time.time()})
+    except Exception as ex:
+        scan_state.update({"state": "error", "error": str(ex)})
+
+
+def known_roots():
+    """Folders that hold (or held) downloads: current + previous download folders + channel folders."""
+    roots = [settings.get()["download_dir"]]
+    try:
+        roots += json.loads(library.get_meta("roots", "[]"))
+    except Exception:
+        pass
+    for j in manager.list():
+        fp = j.get("filepath")
+        if fp:
+            d = os.path.dirname(fp)
+            roots += [d, os.path.dirname(d)]          # the channel folder and the folder above it
+    for c in library.list_channels():
+        if c.get("folder"):
+            roots += [c["folder"], os.path.dirname(c["folder"])]
+    return _clean_roots(roots)
+
+
+def _clean_roots(roots):
+    """Drop drive roots / home folder (never scan a whole disk) and folders inside other folders."""
+    home = os.path.normcase(os.path.expanduser("~"))
+    ok = []
+    for r in roots:
+        if not r:
+            continue
+        r = os.path.normpath(r)
+        if os.path.dirname(r) == r or os.path.normcase(r) == home or len(r) <= 3:
+            continue
+        ok.append(r)
+    ok = sorted(dict.fromkeys(ok), key=len)
+    out = []
+    for r in ok:
+        if not any(os.path.normcase(r).startswith(os.path.normcase(o) + os.sep) for o in out):
+            out.append(r)
+    return out
+
+
+def _first_run_migration():
+    if library.get_meta("migrated_v2"):
+        return
+    s = settings.get()
+    if s.get("organize") == "group":
+        settings.update({"organize": "channel"})   # one folder per channel is now the default
+    scan_library()
+    library.set_meta("migrated_v2", time.time())
+
+
+threading.Thread(target=_first_run_migration, daemon=True).start()
+threading.Thread(target=_auto_sync_loop, daemon=True).start()
 
 # --------------------------------------------------------------------------- misc helpers
 

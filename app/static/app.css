@@ -298,3 +298,48 @@ details.acct summary { cursor: pointer; font-weight: 600; font-size: 13.5px; }
 [dir="rtl"] .ftable th, [dir="rtl"] .ftable td { text-align: right; }
 [dir="rtl"] .ftable td:last-child { text-align: left; }
 [dir="rtl"] #backBtn svg { transform: scaleX(-1); }
+
+/* ---------- library: downloaded marks */
+.have { position: absolute; right: 7px; top: 7px; background: rgba(20,140,80,.92); color: #fff; font-size: 11px; font-weight: 700;
+  padding: 2px 7px; border-radius: 6px; display: inline-flex; gap: 4px; align-items: center; }
+.have svg { width: 12px; height: 12px; stroke: #fff; stroke-width: 3; fill: none; }
+.item.have-cur .thumb img { filter: saturate(.55) brightness(.8); }
+.item.have-cur .title { color: var(--muted); }
+.acts .btn.done { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+[dir="rtl"] .have { right: auto; left: 7px; }
+.chk.small { font-size: 12.5px; color: var(--muted); }
+
+/* ---------- channel bar (browse) */
+.chanbar { display: flex; align-items: center; gap: 14px; padding: 10px 14px; margin: -2px 0 14px; }
+.chanbar img { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; background: var(--surface3); flex: none; }
+.chanbar img:not([src]), .chanbar img[src=""] { visibility: hidden; }
+.cbmain { flex: 1; min-width: 0; }
+.cbcount { font-weight: 650; }
+.cbfolder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- library view */
+.libhead { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
+.libhead h2 { font-size: 20px; margin-bottom: 4px; }
+.libhead p { margin: 0 0 10px; max-width: 720px; }
+.libopts { display: flex; gap: 22px; padding: 14px 16px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 14px; }
+.libopts .field { min-width: 260px; }
+.libchannels { display: flex; flex-direction: column; gap: 10px; padding-bottom: 30px; }
+.lch { display: grid; grid-template-columns: 56px 1fr auto; gap: 14px; align-items: center; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
+.lch img, .lch .ph { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; background: var(--surface3);
+  display: grid; place-items: center; font-weight: 700; font-size: 20px; color: var(--accent-2); }
+.lch h4 { font-size: 15px; margin-bottom: 3px; }
+.lch .lmeta { color: var(--muted); font-size: 12.5px; display: flex; gap: 6px 14px; flex-wrap: wrap; }
+.lch .lmeta a { color: var(--muted); cursor: pointer; text-decoration: underline dotted; }
+.lch .lmeta a:hover { color: var(--accent-2); }
+.lch .lacts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; max-width: 520px; }
+.lch .pill.new { background: var(--accent-bg); color: var(--accent-2); border-color: transparent; font-weight: 700; }
+.lch .pill.ok { color: var(--ok); }
+.lch .pill.err { color: var(--bad); }
+.lch .toggle { font-size: 12.5px; align-items: center; }
+.dupes { padding: 14px 16px; margin-bottom: 14px; border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); }
+.dupes h4 { color: var(--warn); margin-bottom: 6px; }
+.dupes ul { list-style: none; padding: 0; margin: 10px 0 0; max-height: 220px; overflow: auto; font-size: 12.5px; }
+.dupes li { display: flex; gap: 10px; align-items: center; padding: 5px 0; border-top: 1px solid var(--border); }
+.dupes li span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.empty-lib { text-align: center; color: var(--muted); padding: 50px 20px; }

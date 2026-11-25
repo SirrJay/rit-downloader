@@ -69,6 +69,7 @@ function applySettings() {
   $("#dlDir").textContent = s.download_dir;
   renderDrives();
   updateSelInfo();
+  if (S.lastMode !== s.mode) { S.lastMode = s.mode; updateMarks(); }
 }
 
 let saveT;
@@ -86,6 +87,7 @@ document.addEventListener("change", (ev) => {
   if (!el) return;
   let v = el.type === "checkbox" ? el.checked : el.value;
   if (el.dataset.num !== undefined) v = Number(v);
+  if (el.dataset.bool !== undefined) v = v === "true";
   const inBar = !!el.closest("#actionbar");
   saveSetting({ [el.dataset.set]: v }, inBar);
 });
@@ -132,6 +134,7 @@ function showView(v) {
   document.body.classList.toggle("no-actions", v !== "browse");
   if (v === "downloads") pollJobs();
   if (v === "settings") refreshSystem();
+  if (v === "library") loadLibrary();
 }
 $("#tabs").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) showView(b.dataset.view); });
 
@@ -177,7 +180,7 @@ function doSearch() {
 
 function snapshotCurrent() {
   if (!S.req) return null;
-  return { req: S.req, entries: S.entries.slice(), title: S.title, group: S.group, scroll: $("main").scrollTop };
+  return { req: S.req, entries: S.entries.slice(), title: S.title, group: S.group, channel: S.channel, scroll: $("main").scrollTop };
 }
 
 async function startBrowse(req, pushHistory) {
@@ -186,7 +189,8 @@ async function startBrowse(req, pushHistory) {
     if (S.history.length > 15) S.history.shift();
   }
   if (S.browseId && S.loading) api(`browse/${S.browseId}/stop`, {}).catch(() => {});
-  S.req = req; S.entries = []; S.byId.clear(); S.sel.clear(); S.since = 0; S.lastIdx = null;
+  S.req = req; S.entries = []; S.byId.clear(); S.sel.clear(); S.since = 0; S.lastIdx = null; S.channel = null;
+  renderChanBar();
   S.title = req.kind === "search" ? t('Results for "{q}"', { q: req.query }) : t("Loading..."); S.group = req.kind === "search" ? req.query : "";
   $("#filter").value = ""; $("#durFilter").value = ""; $("#sort").value = "";
   $("#hero").classList.add("hidden");
@@ -206,6 +210,7 @@ function setLoading(on, text) {
   $("#loadingMore").classList.toggle("hidden", !on);
   $("#stopLoad").classList.toggle("hidden", !on);
   if (text) $("#loadingText").textContent = text;
+  renderChanBar();
 }
 
 async function pollBrowse(id) {
@@ -223,6 +228,8 @@ async function pollBrowse(id) {
     S.group = S.req.kind === "url" ? S.title : S.group;
   }
   if (S.req.kind === "channels" || S.req.kind === "playlists") S.title = snap.title;
+  if (snap.channel) { S.channel = snap.channel; }
+  renderChanBar();
   $("#rTitle").textContent = S.title;
   $("#rTitle").title = S.title;
   const n = S.entries.length;
@@ -243,7 +250,8 @@ $("#backBtn").addEventListener("click", () => {
   if (S.browseId && S.loading) api(`browse/${S.browseId}/stop`, {}).catch(() => {});
   S.browseId = null; setLoading(false);
   S.req = snap.req; S.entries = snap.entries; S.byId = new Map(snap.entries.map((e) => [e.id, e]));
-  S.title = snap.title; S.group = snap.group; S.sel.clear();
+  S.title = snap.title; S.group = snap.group; S.sel.clear(); S.channel = snap.channel || null;
+  renderChanBar();
   $("#rTitle").textContent = S.title;
   $("#rStatus").textContent = countText(S.entries.length);
   $("#backBtn").classList.toggle("hidden", !S.history.length);
@@ -257,7 +265,9 @@ const countText = (n) => (n === 1 ? t("1 item") : t("{n} items", { n: n.toLocale
 function computeShown() {
   const words = $("#filter").value.toLowerCase().split(/\s+/).filter(Boolean);
   const [lo, hi] = ($("#durFilter").value || "-").split("-").map((x) => (x === "" ? null : +x));
+  const hideHave = $("#hideHave").checked;
   let list = S.entries.filter((e) => {
+    if (hideHave && hasIt(e)) return false;
     if (words.length) {
       const hay = (e.title + " " + e.channel + " " + (e.date || "")).toLowerCase();
       if (!words.every((w) => hay.includes(w))) return false;
@@ -282,7 +292,9 @@ function computeShown() {
   if (cmp) list = list.slice().sort(cmp);
   return list;
 }
-const isFiltered = () => $("#filter").value.trim() || $("#durFilter").value || $("#sort").value;
+const isFiltered = () => $("#filter").value.trim() || $("#durFilter").value || $("#sort").value || $("#hideHave").checked;
+const curMode = () => S.settings.mode || "video";
+const hasIt = (e, mode = curMode()) => !!(e.dl && e.dl[mode]);
 
 const ICON = {
   video: '<svg class="ico" viewBox="0 0 24 24"><rect x="2" y="5" width="15" height="14" rx="2"/><path d="m17 10 5-3v10l-5-3z"/></svg>',
@@ -311,18 +323,54 @@ function card(e, idx) {
         <div class="acts"><button class="btn primary" data-act="openpl">${esc(t("Open playlist"))}</button>
         <button class="btn ghost" data-act="open" title="${esc(t("Open on the website"))}">${ICON.ext}</button></div></div></div>`;
   }
+  const haveCur = hasIt(e) ? " have-cur" : "";
   const live = e.live === "is_live" ? `<span class="live">${esc(t("LIVE"))}</span>` : e.live === "is_upcoming" ? `<span class="live">${esc(t("UPCOMING"))}</span>` : "";
   const chan = e.channel ? (e.channel_url ? `<a href="#" data-act="channel" title="${esc(t("Show all videos by {name}", { name: e.channel }))}">${esc(e.channel)}</a>` : `<span>${esc(e.channel)}</span>`) : "";
-  return `<div class="item${sel}" data-id="${esc(e.id)}" data-idx="${idx}">
-    <div class="thumb" data-act="toggle">${img}<span class="tick">${ICON.check}</span>${e.duration ? `<span class="dur">${fmtDur(e.duration)}</span>` : ""}${live}</div>
+  return `<div class="item${sel}${haveCur}" data-id="${esc(e.id)}" data-idx="${idx}">
+    <div class="thumb" data-act="toggle">${img}<span class="tick">${ICON.check}</span>${haveBadge(e)}${e.duration ? `<span class="dur">${fmtDur(e.duration)}</span>` : ""}${live}</div>
     <div class="body"><div class="title" title="${esc(e.title)}">${esc(e.title)}</div>
       <div class="meta">${chan}${e.views ? `<span>${esc(t("{n} views", { n: fmtNum(e.views) }))}</span>` : ""}${e.date ? `<span>${fmtDate(e.date)}</span>` : ""}</div>
       <div class="acts">
-        <button class="btn" data-act="dl-video" title="${esc(t("Download video with the settings below"))}">${ICON.video}${esc(t("Video"))}</button>
-        <button class="btn" data-act="dl-audio" title="${esc(t("Download audio with the settings below"))}">${ICON.audio}${esc(t("Audio"))}</button>
+        ${dlButton(e, "video")}${dlButton(e, "audio")}
         <button class="btn ghost" data-act="quality" title="${esc(t("See every available quality"))}">${ICON.q}</button>
         <button class="btn ghost" data-act="open" title="${esc(t("Open on the website"))}">${ICON.ext}</button>
       </div></div></div>`;
+}
+
+function haveBadge(e) {
+  if (!e.dl || !(e.dl.audio || e.dl.video)) return "";
+  const icons = (e.dl.audio ? ICON.audio : "") + (e.dl.video ? ICON.video : "");
+  return `<span class="have" title="${esc(t("Downloaded"))}">${ICON.check.replace("<svg", '<svg class="ico"')}${icons}</span>`;
+}
+function dlButton(e, mode) {
+  const have = hasIt(e, mode);
+  const label = mode === "video" ? t("Video") : t("Audio");
+  const title = have ? t("Already downloaded. Click again to download it again.") :
+    t(mode === "video" ? "Download video with the settings below" : "Download audio with the settings below");
+  return `<button class="btn${have ? " done" : ""}" data-act="dl-${mode}" title="${esc(title)}">${ICON[mode]}${esc(label)}${have ? " ✓" : ""}</button>`;
+}
+function updateMarks() {
+  // refresh "downloaded" marks in place (keeps scroll position)
+  $$("#results .item").forEach((el) => {
+    const e = S.byId.get(el.dataset.id); if (!e || e.kind !== "video") return;
+    el.classList.toggle("have-cur", hasIt(e));
+    const th = el.querySelector(".thumb"); const old = th.querySelector(".have");
+    const html = haveBadge(e);
+    if (old) old.remove();
+    if (html) th.querySelector(".tick").insertAdjacentHTML("afterend", html);
+    el.querySelectorAll("[data-act^=dl-]").forEach((b) => { b.outerHTML = dlButton(e, b.dataset.act.slice(3)); });
+  });
+  renderChanBar();
+  updateSelInfo();
+}
+async function refreshMarks() {
+  const vids = S.entries.filter((e) => e.kind === "video" && e.vid).map((e) => e.vid);
+  if (!vids.length) return;
+  try {
+    const st = await api("library/status", { vids });
+    for (const e of S.entries) if (e.kind === "video") e.dl = st[e.vid] || { audio: false, video: false };
+    if ($("#hideHave").checked) render(true); else updateMarks();
+  } catch { /* locked or restarting */ }
 }
 
 let renderT;
@@ -348,7 +396,7 @@ function render(full) {
     updateSelInfo();
   }, full ? 0 : 120);
 }
-["#filter", "#durFilter", "#sort"].forEach((s) => $(s).addEventListener("input", () => render(true)));
+["#filter", "#durFilter", "#sort", "#hideHave"].forEach((s) => $(s).addEventListener("input", () => render(true)));
 $("#viewSeg").addEventListener("click", (e) => {
   const b = e.target.closest("button"); if (!b) return;
   S.view = b.dataset.v; localStorage.setItem("rit.view", S.view);
@@ -363,6 +411,11 @@ function refreshSelClasses() {
   updateSelInfo();
 }
 $("#selAll").addEventListener("click", () => { selectable().forEach((e) => S.sel.add(e.id)); refreshSelClasses(); });
+$("#selNew").addEventListener("click", () => {
+  S.sel.clear();
+  selectable().filter((e) => !hasIt(e) && e.live !== "is_upcoming").forEach((e) => S.sel.add(e.id));
+  refreshSelClasses();
+});
 $("#selNone").addEventListener("click", () => { S.sel.clear(); refreshSelClasses(); });
 
 $("#results").addEventListener("click", (ev) => {
@@ -384,7 +437,11 @@ $("#results").addEventListener("click", (ev) => {
     S.lastIdx = idx;
     refreshSelClasses();
   } else if (act === "dl-video" || act === "dl-audio") {
-    enqueue([e], { mode: act === "dl-video" ? "video" : "audio" });
+    const mode = act === "dl-video" ? "video" : "audio";
+    if (hasIt(e, mode)) {
+      if (!confirmInline(t("Already downloaded. Click again to download it again."))) return;
+      enqueue([e], { mode }, null, true);
+    } else enqueue([e], { mode });
   } else if (act === "quality") {
     openQualities(e);
   } else if (act === "open") {
@@ -396,6 +453,41 @@ $("#results").addEventListener("click", (ev) => {
   } else if (act === "openpl") {
     startBrowse({ kind: "url", query: e.url }, true);
   }
+});
+
+/* ---------------------------------------------------------------- channel bar ("download new only") */
+function channelNew() {
+  return S.entries.filter((e) => e.kind === "video" && !hasIt(e) && e.live !== "is_upcoming" && e.live !== "is_live");
+}
+function renderChanBar() {
+  const ch = S.channel, bar = $("#chanBar");
+  if (!ch) { bar.classList.add("hidden"); return; }
+  bar.classList.remove("hidden");
+  const vids = S.entries.filter((e) => e.kind === "video");
+  const fresh = channelNew();
+  $("#cbThumb").src = ch.thumb || "";
+  $("#cbCount").textContent = `${ch.name} · ${t("{n} new of {total}", { n: fresh.length.toLocaleString(), total: vids.length.toLocaleString() })}`;
+  $("#cbFolder").textContent = ch.folder ? t("Folder: {path}", { path: ch.folder }) : "";
+  $("#cbFolder").title = ch.folder || "";
+  $("#cbTrack").checked = !!(ch.tracked && ch.auto);
+  const b = $("#cbNew");
+  b.disabled = !fresh.length || S.loading;
+  b.textContent = fresh.length ? t("Download new ({n})", { n: fresh.length.toLocaleString() }) : (S.loading ? t("Loading...") : t("Up to date"));
+}
+$("#cbNew").addEventListener("click", () => {
+  const fresh = channelNew().slice().reverse();   // oldest first
+  if (fresh.length > 25 && !confirmInline(t("Download all {n} shown items?", { n: fresh.length }))) return;
+  enqueue(fresh);
+});
+$("#cbTrack").addEventListener("change", async (ev) => {
+  const ch = S.channel; if (!ch) return;
+  const on = ev.target.checked;
+  try {
+    const r = await api("library/channel", { id: ch.id, name: ch.name, url: ch.url, thumb: ch.thumb, tracked: on, auto: on, opts: barOptions() });
+    ch.tracked = on; ch.auto = on; ch.folder = r.channel && r.channel.folder;
+    renderChanBar();
+    toast(on ? t("New videos from this channel are downloaded automatically into its folder.") : t("Saved"), "ok");
+  } catch (e) { ev.target.checked = !on; toast(e.message, "bad"); }
 });
 
 /* ---------------------------------------------------------------- selection summary + size estimate */
@@ -412,7 +504,7 @@ function estimateBytes(seconds) {
 function updateSelInfo() {
   const picked = S.entries.filter((e) => S.sel.has(e.id));
   const n = picked.length;
-  const shownVideos = selectable();
+  const shownVideos = selectable().filter((e) => !hasIt(e) && e.live !== "is_upcoming");   // only what is still missing
   $("#dlSel").disabled = !n;
   $("#dlSel").textContent = n ? t("Download selected ({n})", { n: n.toLocaleString() }) : t("Download selected");
   $("#dlShown").textContent = t("Download all shown ({n})", { n: shownVideos.length.toLocaleString() });
@@ -434,16 +526,20 @@ function barOptions(over = {}) {
   return Object.assign({ mode: s.mode, video_quality: s.video_quality, video_container: s.video_container,
     audio_format: s.audio_format, audio_quality: s.audio_quality }, over);
 }
-async function enqueue(entries, over = {}, formatId) {
+async function enqueue(entries, over = {}, formatId, force = false) {
   const items = entries.filter((e) => e.kind === "video").map((e) => ({
     url: e.url, title: e.title, thumb: e.thumb, channel: e.channel, duration: e.duration, format_id: formatId || null,
+    vid: e.vid, site: e.site, channel_id: e.channel_id,
   }));
   if (!items.length) return;
   try {
-    const r = await api("download", { items, options: barOptions(over), group: S.group || S.title });
+    const r = await api("download", { items, options: barOptions(over), group: S.group || S.title, force: force || !!formatId });
     const audio = (over.mode || S.settings.mode) === "audio";
-    const msg = r.added ? t(audio ? "Added {n} audio downloads" : "Added {n} video downloads", { n: r.added }) +
-      (r.skipped ? " " + t("({n} already in the list)", { n: r.skipped }) : "") : t("Already in the download list");
+    const parts = [];
+    if (r.added) parts.push(t(audio ? "Added {n} audio downloads" : "Added {n} video downloads", { n: r.added }));
+    if (r.already) parts.push(t("{n} already downloaded (skipped)", { n: r.already }));
+    if (r.queued) parts.push(t("({n} already in the list)", { n: r.queued }));
+    const msg = parts.join(" · ") || t("Already in the download list");
     toast(msg, r.added ? "ok" : "");
     pollJobs();
   } catch (e) { toast(e.message, "bad"); }
@@ -453,7 +549,7 @@ $("#dlSel").addEventListener("click", () => {
   S.sel.clear(); refreshSelClasses();
 });
 $("#dlShown").addEventListener("click", () => {
-  const list = selectable();
+  const list = selectable().filter((e) => !hasIt(e) && e.live !== "is_upcoming");
   if (list.length > 25 && !confirmInline(t("Download all {n} shown items?", { n: list.length }))) return;
   enqueue(list);
 });
@@ -551,6 +647,9 @@ async function pollJobs() {
   let data;
   try { data = await api("jobs"); } catch { jobsT = setTimeout(pollJobs, 3000); return; }
   const { jobs, stats } = data;
+  const finished = (stats.done || 0) + (stats.skipped || 0);
+  if (S.lastFinished !== undefined && finished > S.lastFinished) refreshMarks();
+  S.lastFinished = finished;
   const active = (stats.running || 0) + (stats.queued || 0);
   const badge = $("#dlBadge");
   badge.textContent = active; badge.classList.toggle("hidden", !active);
@@ -666,6 +765,119 @@ async function boot() {
   }
 }
 
+/* ---------------------------------------------------------------- library */
+let libT;
+const rtf = () => new Intl.RelativeTimeFormat(I18N.lang, { numeric: "auto" });
+function ago(ts) {
+  if (!ts) return "";
+  const s = (Date.now() / 1000) - ts;
+  if (s < 60) return rtf().format(0, "minute");
+  if (s < 3600) return rtf().format(-Math.round(s / 60), "minute");
+  if (s < 86400) return rtf().format(-Math.round(s / 3600), "hour");
+  return rtf().format(-Math.round(s / 86400), "day");
+}
+function optsLabel(o) {
+  if (!o) return "";
+  return jobFmt({ opts: o });
+}
+async function loadLibrary() {
+  clearTimeout(libT);
+  if (!$("#view-library").classList.contains("on")) return;
+  let d;
+  try { d = await api("library"); } catch { libT = setTimeout(loadLibrary, 4000); return; }
+  S.lib = d;
+  const tot = d.totals;
+  $("#libTotals").innerHTML = [t("{n} files", { n: tot.files.toLocaleString() }), fmtBytes(tot.bytes) || "0 B",
+    t("{n} channels", { n: tot.channels })].map((x) => `<span class="chip">${esc(x)}</span>`).join("");
+  const sc = d.scan || {};
+  $("#libScanState").textContent = sc.state === "scanning" ? t("Scanning... {n} files found", { n: sc.found || 0 }) :
+    sc.state === "done" ? t("Library updated: {n} files found.", { n: (sc.found || 0).toLocaleString() }) + " " + ago(sc.finished) : "";
+  renderDupes(sc.duplicates || []);
+  const box = $("#libChannels");
+  if (!d.channels.length) {
+    box.innerHTML = `<div class="empty-lib">${esc(t("No channels yet. Download from a channel, or open one in Browse and choose Keep up to date."))}</div>`;
+  } else {
+    box.innerHTML = d.channels.map(libRow).join("");
+  }
+  const busy = d.channels.some((c) => c.sync && c.sync.state === "checking") || sc.state === "scanning";
+  libT = setTimeout(loadLibrary, busy ? 1500 : 6000);
+}
+function libRow(c) {
+  const sy = c.sync || {};
+  let status = "";
+  if (sy.state === "checking") status = `<span class="pill"><span class="spin"></span> ${esc(t("Checking..."))}</span>`;
+  else if (sy.state === "error") status = `<span class="pill err" title="${esc(sy.error || "")}">${esc(t("Error"))}</span>`;
+  else if (sy.state === "done") status = sy.queued ? `<span class="pill new">${esc(t("Found {n} new videos. Added to downloads.", { n: sy.queued }))}</span>` :
+    sy.new ? `<span class="pill new">${esc(t("{n} new", { n: sy.new }))}</span>` : `<span class="pill ok">${esc(t("Up to date"))}</span>`;
+  else if (c.new_count) status = `<span class="pill new">${esc(t("{n} new", { n: c.new_count }))}</span>`;
+  const initial = esc((c.name || "?").trim().charAt(0).toUpperCase());
+  const pic = c.thumb ? `<img src="${esc(c.thumb)}" alt="" referrerpolicy="no-referrer">` : `<div class="ph">${initial}</div>`;
+  const key = esc(c.channel_id);
+  const newN = sy.state === "done" && !sy.queued ? sy.new : c.new_count;
+  return `<div class="lch" data-key="${key}">${pic}
+    <div><h4>${esc(c.name || c.channel_id)}</h4>
+      <div class="lmeta">
+        <span>${esc(t("{a} audio · {v} video", { a: c.n_audio || 0, v: c.n_video || 0 }))} · ${esc(fmtBytes(c.bytes) || "0 B")}</span>
+        <span>${esc(c.last_sync ? t("Last checked {t}", { t: ago(c.last_sync) }) : t("Never checked"))}</span>
+        ${c.folder ? `<a data-lact="open" title="${esc(c.folder)}">${esc(t("Folder: {path}", { path: c.folder }))}</a>` : ""}
+        ${c.tracked && c.opts ? `<span>${esc(t("Uses: {opts}", { opts: optsLabel(c.opts) }))}</span>` : ""}
+      </div></div>
+    <div class="lacts">${status}
+      <label class="toggle"><input type="checkbox" data-lact="track" ${c.tracked && c.auto ? "checked" : ""}><span></span> ${esc(t("Keep up to date"))}</label>
+      <button class="btn sm" data-lact="check">${esc(t("Check for new"))}</button>
+      <button class="btn sm primary" data-lact="sync">${esc(newN ? t("Download new ({n})", { n: newN }) : t("Download new"))}</button>
+      ${c.url ? `<button class="btn sm ghost" data-lact="view">${esc(t("View videos"))}</button>` : ""}
+      <button class="btn sm ghost" data-lact="folder">${esc(t("Change folder"))}</button>
+      ${c.tracked ? `<button class="btn sm ghost" data-lact="opts">${esc(t("Use current settings"))}</button>` : ""}
+      ${c.tracked ? `<button class="btn sm ghost" data-lact="untrack">${esc(t("Stop tracking"))}</button>` : ""}
+    </div></div>`;
+}
+function renderDupes(list) {
+  const box = $("#libDupes");
+  if (!list.length) { box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  const size = list.reduce((a, d) => a + (d.size || 0), 0);
+  box.innerHTML = `<h4>${esc(t("Duplicate copies found: {n}", { n: list.length }))}</h4>
+    <div class="muted small">${esc(t("These files are extra copies of videos you already have. Nothing was deleted. Review and delete them yourself if you want to free {size}.", { size: fmtBytes(size) }))}</div>
+    <ul>${list.map((d, i) => `<li><span title="${esc(d.copy)}">${esc(d.copy)}</span>
+      <button class="btn sm ghost" data-dupe="${i}">${esc(t("Show in folder"))}</button></li>`).join("")}</ul>`;
+  box.onclick = (ev) => {
+    const b = ev.target.closest("[data-dupe]"); if (!b) return;
+    api("open", { path: list[+b.dataset.dupe].copy, select: true });
+  };
+}
+$("#libChannels").addEventListener("click", async (ev) => {
+  const el = ev.target.closest("[data-lact]"); if (!el || el.tagName === "INPUT") return;
+  const row = el.closest(".lch"); const key = row.dataset.key;
+  const c = (S.lib.channels || []).find((x) => x.channel_id === key) || {};
+  const a = el.dataset.lact;
+  if (a === "open") return api("open", { path: c.folder });
+  if (a === "check" || a === "sync") { await api("library/sync", { keys: [key], download: a === "sync" }); return loadLibrary(); }
+  if (a === "view") { showView("browse"); startBrowse({ kind: "url", query: c.url, tabs: ["videos", "streams"] }, true); return; }
+  if (a === "folder") {
+    toast(t("A folder picker opened. It may be behind this window."));
+    const r = await api("library/channel/folder", { key });
+    if (r.path) toast(t("Channel folder changed. New downloads will go to: {path}", { path: r.path }), "ok");
+    return loadLibrary();
+  }
+  if (a === "opts") { await api("library/channel", { key, opts: barOptions() }); toast(t("Saved"), "ok"); return loadLibrary(); }
+  if (a === "untrack") { await api("library/remove", { key }); toast(t("Stopped tracking. Files and history are kept."), "ok"); return loadLibrary(); }
+});
+$("#libChannels").addEventListener("change", async (ev) => {
+  const el = ev.target.closest("[data-lact=track]"); if (!el) return;
+  const key = el.closest(".lch").dataset.key;
+  const c = (S.lib.channels || []).find((x) => x.channel_id === key) || {};
+  await api("library/channel", { key, tracked: el.checked, auto: el.checked, opts: c.opts || barOptions() });
+  if (el.checked) toast(t("New videos from this channel are downloaded automatically into its folder."), "ok");
+  loadLibrary();
+});
+$("#libSyncAll").addEventListener("click", async () => { await api("library/sync", { keys: "all", download: false }); loadLibrary(); });
+$("#libScan").addEventListener("click", async () => { await api("library/scan", {}); loadLibrary(); });
+$("#libAddFolder").addEventListener("click", async () => {
+  toast(t("A folder picker opened. It may be behind this window."));
+  await api("library/scan", { pick: true }); loadLibrary();
+});
+
 /* ---------------------------------------------------------------- language */
 $$("select.langsel").forEach((sel) => {
   sel.innerHTML = langOptions();
@@ -684,6 +896,8 @@ document.addEventListener("langchange", () => {
     $("#rStatus").textContent = S.loading ? t("{n} loaded", { n: S.entries.length.toLocaleString() }) : countText(S.entries.length);
   }
   $$("#jobs .jacts").forEach((el) => { el.dataset.k = ""; });
+  renderChanBar();
+  loadLibrary();
   pollJobs();
   refreshSystem();
 });

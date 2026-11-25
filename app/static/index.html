@@ -16,6 +16,7 @@
   <nav class="tabs" id="tabs">
     <button data-view="browse" class="on">Browse</button>
     <button data-view="downloads">Downloads <span id="dlBadge" class="badge hidden"></span></button>
+    <button data-view="library">Library</button>
     <button data-view="settings">Settings</button>
   </nav>
   <div class="sys" id="sysinfo" title="Download folder free space"></div>
@@ -97,6 +98,8 @@
         <option value="views">Most viewed</option>
         <option value="az">Title A to Z</option>
       </select>
+      <label class="chk small"><input type="checkbox" id="hideHave"> Hide downloaded</label>
+      <button id="selNew" class="btn sm">Select new only</button>
       <button id="selAll" class="btn sm">Select all shown</button>
       <button id="selNone" class="btn ghost sm">Clear</button>
       <button id="exportBtn" class="btn ghost sm" title="Save this list as a spreadsheet (CSV)">Export list</button>
@@ -105,6 +108,16 @@
         <button data-v="list" title="List"><svg class="ico" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
       </div>
     </div>
+  </div>
+
+  <div id="chanBar" class="chanbar card hidden">
+    <img id="cbThumb" alt="" referrerpolicy="no-referrer">
+    <div class="cbmain">
+      <div class="cbcount" id="cbCount" data-no-i18n></div>
+      <div class="cbfolder muted small" id="cbFolder" data-no-i18n></div>
+    </div>
+    <label class="toggle" title="New videos from this channel are downloaded automatically into its folder."><input type="checkbox" id="cbTrack"><span></span> Keep up to date</label>
+    <button class="btn primary" id="cbNew" data-no-i18n></button>
   </div>
 
   <div id="results" class="grid"></div>
@@ -142,6 +155,38 @@
   </div>
 </section>
 
+<!-- ============================== LIBRARY -->
+<section id="view-library" class="view">
+  <div class="libhead">
+    <div>
+      <h2>Your library</h2>
+      <p class="muted small">Channels you download from appear here. Already-downloaded videos are skipped, and new ones go to the channel's own folder.</p>
+      <div class="chips" id="libTotals" data-no-i18n></div>
+    </div>
+    <div class="tools">
+      <button class="btn primary sm" id="libSyncAll">Check all for new videos</button>
+      <button class="btn sm" id="libScan">Rescan folders</button>
+      <button class="btn ghost sm" id="libAddFolder">Add a folder</button>
+    </div>
+  </div>
+  <div class="libopts card">
+    <label class="field">If I delete a downloaded file
+      <select data-set="redownload_deleted" data-bool>
+        <option value="false">Don't download it again (recommended)</option>
+        <option value="true">Download it again</option>
+      </select>
+    </label>
+    <label class="field">Check channels kept up to date every
+      <select data-set="sync_hours" data-num>
+        <option value="6">6 hours</option><option value="12">12 hours</option><option value="24">24 hours</option>
+      </select>
+    </label>
+    <div class="muted small" id="libScanState" data-no-i18n></div>
+  </div>
+  <div id="libDupes" class="dupes card hidden" data-no-i18n></div>
+  <div id="libChannels" class="libchannels" data-no-i18n></div>
+</section>
+
 <!-- ============================== SETTINGS -->
 <section id="view-settings" class="view">
   <div class="settings">
@@ -155,11 +200,12 @@
       <div class="drives" id="drives"></div>
       <label class="field">Folders
         <select data-set="organize">
-          <option value="group">One folder for each channel, search or playlist (recommended)</option>
-          <option value="channel">One folder for each uploader</option>
+          <option value="channel">One folder for each channel (recommended)</option>
+          <option value="group">One folder for each search or playlist</option>
           <option value="none">Everything in one folder</option>
         </select>
       </label>
+      <p class="note">Each channel keeps its folder, even if you change the download folder. You can move a channel's folder in Library.</p>
       <label class="toggle"><input type="checkbox" data-set="date_prefix"><span></span> Start file names with the upload date (2025-03-09 - Title.mp3), so files sort by date</label>
       <label class="toggle"><input type="checkbox" data-set="archive"><span></span> Skip videos I already downloaded. Run the same channel again later to get only the new ones.</label>
     </div>

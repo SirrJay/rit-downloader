@@ -2,6 +2,14 @@
 
 Search YouTube (and other sites), load every video a person or channel has published, and download them one at a time or in bulk, as video or audio, in the quality you choose.
 
+## No duplicates, and every channel keeps its own folder
+- **Library**: Rit Downloader remembers every file you've downloaded, in any folder. Videos you already have are marked **Downloaded** with a green tick, and they're skipped automatically. They're never queued twice, even from the browser extension.
+- **One folder per channel**: each channel's videos always go to that channel's folder. The folder stays the same even if you change the download folder later. You can move a channel's folder in **Library > Change folder**.
+- **New videos only**: open a channel and click **Download new (N)**, or click **Check for new** in the **Library** tab. Turn on **Keep up to date** and new sermons download automatically into the channel's folder (every 6, 12 or 24 hours).
+- **Existing downloads are recognised**: on first start, the app reads earlier skip lists and your download history, then scans your download folders. Use **Rescan folders** or **Add a folder** in Library for other locations.
+- **Duplicate report**: if two copies of the same video exist, Library lists them with **Show in folder**. Nothing is ever deleted for you.
+- **Want it again?** Click a video's ✓ button twice to download it again. In Library, "If I delete a downloaded file" decides whether deleted files come back.
+
 ## Languages and sign-in
 - **13 languages**: English, Français, Español, Português, Deutsch, Bahasa Indonesia, Русский, Kiswahili, Hausa, Yorùbá, العربية (right-to-left), 中文 and हिन्दी. The app follows your computer's language, and you can change it with the selector in the top bar or on the sign-in screen.
 - **App lock**: on first launch you create a username and password for this computer. You can choose "Keep me signed in", lock the app with the padlock button, set auto-lock after a period of inactivity, or turn the password off in **Settings > Account and security**. Downloads keep running while the app is locked.

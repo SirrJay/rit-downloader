@@ -48,7 +48,7 @@ zip_package("yt-dlp-ejs", "yt_dlp_ejs", "yt_dlp_ejs-{v}-py3-none-any.whl")
 
 # Analyse yt-dlp fully so every standard-library module and dependency it uses is bundled...
 hidden = collect_submodules("yt_dlp") + collect_submodules("yt_dlp_ejs") + [
-    "engine", "engine_dialog", "paths", "auth", "setup_ffmpeg", "version",
+    "engine", "engine_dialog", "paths", "auth", "library", "setup_ffmpeg", "version",
     "waitress", "flask", "certifi", "websockets", "brotli", "mutagen", "Cryptodome", "requests", "urllib3",
     "sqlite3", "xml.etree.ElementTree", "http.cookiejar", "netrc", "getpass", "hmac", "ctypes",
 ]

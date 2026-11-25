@@ -274,8 +274,82 @@ def formats():
 def download():
     d = request.get_json() or {}
     items = d.get("items") or ([{"url": d["url"], "title": d.get("title", "")}] if d.get("url") else [])
-    n = E.manager.add(items, d.get("options"), d.get("group"))
-    return jsonify(added=n, skipped=len(items) - n)
+    r = E.manager.add(items, d.get("options"), d.get("group"), force=bool(d.get("force")))
+    return jsonify(**r, skipped=r["already"] + r["queued"])
+
+
+# ---- library: what is already downloaded, channel folders, "download new only" ----------
+@app.post("/api/library/status")
+def library_status():
+    vids = (request.get_json() or {}).get("vids") or []
+    return jsonify(E.library.status_map(vids[:5000], E.settings.get().get("redownload_deleted")))
+
+
+@app.get("/api/library")
+def library_overview():
+    chans = E.library.list_channels()
+    for c in chans:
+        c["sync"] = E.sync_state.get(c["channel_id"])
+    scan = {k: v for k, v in E.scan_state.items() if k != "duplicates"}
+    scan["duplicates"] = (E.scan_state.get("duplicates") or [])[:300]
+    return jsonify(totals=E.library.totals(), channels=chans, scan=scan,
+                   moved={k: v["to"] for k, v in E.sync_state.items() if v.get("state") == "moved"})
+
+
+@app.post("/api/library/sync")
+def library_sync():
+    d = request.get_json() or {}
+    keys = d.get("keys")
+    if keys == "all":
+        keys = [c["channel_id"] for c in E.library.list_channels() if c.get("tracked") or c.get("url")
+                or c["channel_id"].startswith("name:")]
+    E.start_sync(keys or [], download=bool(d.get("download", True)))
+    return jsonify(ok=True, keys=keys)
+
+
+@app.post("/api/library/channel")
+def library_channel():
+    """Track / update a channel: {key | id+name+url, tracked, auto, opts}."""
+    d = request.get_json() or {}
+    key = d.get("key") or d.get("id")
+    cid = None if (key or "").startswith("name:") else key
+    name = d.get("name") or (E.library.get_channel(key) or {}).get("name")
+    k = E.library.upsert_channel(cid, name, url=d.get("url"), thumb=d.get("thumb"),
+                                 tracked=d.get("tracked"), auto=d.get("auto"), opts=d.get("opts"))
+    if d.get("tracked") and not (E.library.get_channel(k) or {}).get("folder"):
+        E.library.channel_folder(cid, name, E.settings.get()["download_dir"])
+    return jsonify(ok=True, channel=E.library.get_channel(k))
+
+
+@app.post("/api/library/channel/folder")
+def library_channel_folder():
+    key = (request.get_json() or {}).get("key")
+    ch = E.library.get_channel(key)
+    if not ch:
+        abort(404)
+    p = E.pick_folder(ch.get("folder") or E.settings.get()["download_dir"])
+    if p:
+        E.library.upsert_channel(None if key.startswith("name:") else key, ch.get("name"), folder=p)
+    return jsonify(path=p)
+
+
+@app.post("/api/library/remove")
+def library_remove():
+    E.library.remove_channel((request.get_json() or {}).get("key"))
+    return jsonify(ok=True)
+
+
+@app.post("/api/library/scan")
+def library_scan():
+    d = request.get_json() or {}
+    extra = []
+    if d.get("pick"):
+        p = E.pick_folder(E.settings.get()["download_dir"])
+        if not p:
+            return jsonify(ok=False)
+        extra.append(p)
+    threading.Thread(target=E.scan_library, args=(extra,), daemon=True).start()
+    return jsonify(ok=True)
 
 
 @app.get("/api/jobs")

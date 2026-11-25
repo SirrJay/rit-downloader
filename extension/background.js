@@ -18,7 +18,8 @@ async function sendDownload(url, title, mode) {
     body: JSON.stringify({ items: [{ url, title }], options: { mode } }),
   });
   const j = await r.json().catch(() => ({}));
-  notify(j.added ? `Added to downloads (${mode}).` : "It's already in the download list.");
+  notify(j.added ? `Added to downloads (${mode}).` : j.already ? "You already have this one. Skipped." :
+    r.status === 401 ? "Rit Downloader is locked. Open it and sign in first." : "It's already in the download list.");
   return true;
 }
 
