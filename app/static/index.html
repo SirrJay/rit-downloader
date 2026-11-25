@@ -144,8 +144,11 @@
       <button class="btn sm" data-all="pause">Pause all</button>
       <button class="btn sm" data-all="resume">Resume all</button>
       <button class="btn sm" data-all="retry">Retry failed</button>
-      <button class="btn ghost sm" data-all="clear">Clear finished</button>
       <button class="btn ghost sm" data-all="cancel">Cancel all</button>
+      <span class="sepv"></span>
+      <button class="btn ghost sm" data-all="clear" title="Remove finished items from this list. Your files stay on disk.">Clear finished</button>
+      <button class="btn ghost sm" data-all="clear_failed" title="Remove failed and canceled items from this list.">Clear failed</button>
+      <button class="btn danger sm" data-all="clear_all" title="Empty the whole list and stop downloads in progress. Files already downloaded stay on disk.">Clear all</button>
       <button class="btn primary sm" id="openFolder">Open download folder</button>
     </div>
   </div>
@@ -164,6 +167,7 @@
       </select>
     </label>
   </div>
+  <div id="dlChannels" class="dlchannels" data-no-i18n></div>
   <div id="jobs" class="jobs"></div>
   <div id="jobsEmpty" class="hero small">
     <h2>No downloads yet</h2>

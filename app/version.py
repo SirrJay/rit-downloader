@@ -1,4 +1,4 @@
-﻿VERSION = "1.2.0"
+﻿VERSION = "1.3.0"
 
 # GitHub repository that hosts releases. The app checks it for new versions
 # and shows an "Update available" banner.

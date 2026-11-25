@@ -362,3 +362,17 @@ details.acct summary { cursor: pointer; font-weight: 600; font-size: 13.5px; }
 .clipbox input { width: 100%; }
 .cookie-ok { color: var(--ok); } .cookie-bad { color: var(--bad); }
 input[type=time] { font: inherit; color: var(--text); background: var(--surface2); border: 1px solid var(--border); border-radius: 9px; padding: 7px 9px; color-scheme: inherit; }
+
+/* ---------- v1.3: channels in the download list */
+.sepv { width: 1px; align-self: stretch; background: var(--border); margin: 0 2px; }
+.dlchannels { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.dlch { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; font-size: 13px; }
+.dlch.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.dlch .nm { font-weight: 650; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 340px; }
+.dlch .nm:hover { color: var(--accent-2); }
+.dlch .cnt { color: var(--muted); flex: 1; }
+.dlch .cnt b { color: var(--text); }
+.dlch .bar { width: 120px; flex: none; }
+.dlch .btn { padding: 4px 9px; font-size: 12px; }
+.job .pos { font-size: 11px; font-weight: 700; color: var(--accent-2); }

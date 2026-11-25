@@ -736,7 +736,7 @@ class Job:
     FIELDS = ("id", "url", "title", "thumb", "group", "format_id", "opts", "status", "percent",
               "speed", "eta", "downloaded", "total", "stage", "filepath", "error", "created",
               "finished", "channel", "duration", "vid", "site", "channel_id", "force",
-              "section", "attempts", "retry_at", "error_raw")
+              "section", "attempts", "retry_at", "error_raw", "batch", "seq")
 
     def __init__(self, url, title="", thumb="", group=None, format_id=None, opts=None,
                  channel="", duration=None):
@@ -756,6 +756,8 @@ class Job:
         self.vid = self.site = self.channel_id = None
         self.force = False
         self.section = None          # "HH:MM:SS-HH:MM:SS" = download only that part
+        self.batch = time.time()     # newest request is downloaded first
+        self.seq = 0                 # order inside a request
         self.attempts = 0
         self.retry_at = None
         self.error_raw = None
@@ -810,6 +812,8 @@ class Manager:
         self.hold_reason = None      # "disk" | "schedule" (shown in the interface)
         self.batch_active = False
         self.batch_start = 0
+        self._seq = 0
+        self._offline_check = 0
         self.last_batch = None
         self._load()
         threading.Thread(target=self._scheduler, daemon=True).start()
@@ -823,7 +827,12 @@ class Manager:
                     j = Job.from_dict(d)
                     if j.status in ("running", "queued"):
                         j.status, j.stage = "paused", "Paused (app was closed)"
-                    elif j.status == "error" and is_cookie_error(j.error):
+                    if not d.get("batch"):
+                        j.batch = j.created          # jobs from older versions keep their original order
+                    self._seq += 1
+                    j.seq = j.seq or self._seq
+                    self._seq = max(self._seq, j.seq)
+                    if j.status == "error" and is_cookie_error(j.error):
                         # failed only because the browser sign-in could not be read (fixed in 1.2)
                         j.status, j.stage, j.error = "paused", "Ready to retry: the sign-in problem is fixed", None
                     self.jobs.append(j)
@@ -861,6 +870,7 @@ class Manager:
         skip_known = s.get("archive", True) and not force
         redl = s.get("redownload_deleted")
         added = already = queued = 0
+        batch = time.time()
         with self.lock:
             active = set()
             for j in self.jobs:
@@ -886,6 +896,8 @@ class Manager:
                         it.get("format_id"), dict(s), it.get("channel", ""), it.get("duration"))
                 j.vid, j.site, j.channel_id, j.force = vid, it.get("site"), it.get("channel_id"), bool(force)
                 j.section = it.get("section") or None
+                self._seq += 1
+                j.batch, j.seq = batch, self._seq
                 self.jobs.append(j)
                 added += 1
             if added:
@@ -893,6 +905,13 @@ class Manager:
             self._trim_history(s.get("history_limit") or 3000)
         self.touch()
         return {"added": added, "already": already, "queued": queued}
+
+    def _recheck_online(self):
+        if is_online():
+            with self.cv:
+                if self.hold == "offline":
+                    self.hold = None
+                    self.cv.notify_all()
 
     def _start_batch(self):
         if not self.batch_active:
@@ -918,7 +937,17 @@ class Manager:
 
     def list(self):
         with self.lock:
-            return [j.to_dict() for j in self.jobs]
+            out = [j.to_dict() for j in self.jobs]
+            order = sorted((j for j in self.jobs if j.status == "queued"), key=self._priority, reverse=True)
+            pos = {id(j): i + 1 for i, j in enumerate(order)}
+            for d, j in zip(out, self.jobs):
+                d["position"] = pos.get(id(j))
+            return out
+
+    @staticmethod
+    def _priority(j):
+        # newest request first; inside a request keep the original order
+        return (j.batch or j.created or 0, -(j.seq or 0))
 
     def action(self, ids, act):
         with self.lock:
@@ -946,8 +975,28 @@ class Manager:
                         j.remove_after = True
                     else:
                         self.jobs.remove(j)
+            if act == "top":
+                # "Download first": move these to the front of the queue (newest request)
+                now = time.time()
+                for j in targets:
+                    if j.status in ("queued", "paused", "error", "canceled"):
+                        if j.status != "queued":
+                            j.status, j.stage, j.error, j.error_raw, j.attempts, j.retry_at = "queued", "", None, None, 0, None
+                        j.batch = now
+                        j.retry_at = None
+                self.hold = None if self.hold == "disk" else self.hold
+                self._start_batch()
             if act == "clear":
                 self.jobs = [j for j in self.jobs if j.status in ("queued", "running", "paused")]
+            elif act == "clear_failed":
+                self.jobs = [j for j in self.jobs if j.status not in ("error", "canceled")]
+            elif act == "clear_all":
+                # remove everything from the list; running downloads are stopped (files already saved stay on disk)
+                for j in self.jobs:
+                    if j.status == "running":
+                        j.stop_reason = "cancel"
+                        j.remove_after = True
+                self.jobs = [j for j in self.jobs if j.status == "running"]
         self.touch()
 
     def stats(self):
@@ -964,15 +1013,20 @@ class Manager:
                 st = settings.get()
                 limit = max(1, min(8, int(st.get("concurrency") or 1)))
                 nxt = None
+                if self.hold == "offline" and time.time() - self._offline_check > 10:
+                    self._offline_check = time.time()
+                    threading.Thread(target=self._recheck_online, daemon=True).start()
                 self.hold_reason = self.hold or ("schedule" if st.get("schedule_enabled") and not in_window(st) else None)
                 if not self.hold_reason and self.running < limit:
                     now = time.time()
-                    nxt = next((j for j in self.jobs if j.status == "queued" and (j.retry_at or 0) <= now), None)
+                    ready = [j for j in self.jobs if j.status == "queued" and (j.retry_at or 0) <= now]
+                    nxt = max(ready, key=self._priority) if ready else None
                 if nxt is None:
                     self._check_batch_done()
                     self.cv.wait(timeout=1.0)
                     continue
                 nxt.status, nxt.stage, nxt.percent = "running", "Starting...", 0
+                nxt.error = nxt.error_raw = None
                 self.running += 1
             threading.Thread(target=self._run, args=(nxt,), daemon=True).start()
 
@@ -1049,6 +1103,10 @@ class Manager:
                 if code == "disk":
                     job.status, job.stage = "paused", "Paused: not enough disk space"
                     self.hold = "disk"
+                elif code == "network" and not is_online():
+                    # the internet is down: wait for it (does not use up retry attempts)
+                    job.status, job.stage, job.retry_at = "queued", "Waiting for internet connection...", None
+                    self.hold, self._offline_check = "offline", time.time()
                 elif code in RETRYABLE and s.get("auto_retry", True) and job.attempts < 3:
                     job.attempts += 1
                     job.retry_at = time.time() + RETRYABLE[code] * job.attempts
@@ -1146,6 +1204,18 @@ class Manager:
 
 class DiskLow(Exception):
     pass
+
+
+def is_online(timeout=4):
+    """Can we reach YouTube (DNS + TCP)? Used to wait for the internet instead of failing downloads."""
+    import socket
+    for host in ("www.youtube.com", "www.google.com"):
+        try:
+            with socket.create_connection((host, 443), timeout=timeout):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def _hm(v, default):
@@ -1259,10 +1329,11 @@ def resolve_channel(key):
     if not ch or ch.get("url"):
         return key
     with library._lock:
-        rows = library._db().execute("SELECT video_id, extractor FROM downloads WHERE channel_id=? LIMIT 3",
-                                     (key,)).fetchall()
+        rows = library._db().execute("SELECT video_id, extractor FROM downloads WHERE channel_id=? "
+                                     "ORDER BY RANDOM() LIMIT 4", (key,)).fetchall()
     opts = ydl_opts_from_args(base_args(settings.get()) + ["--no-playlist"])
     opts.update({"quiet": True, "no_warnings": True, "skip_download": True, "logger": _QuietLogger()})
+    found = {}
     for r in rows:
         vid = r["video_id"]
         if len(vid) != 11 or (r["extractor"] and r["extractor"] != "youtube"):
@@ -1271,10 +1342,15 @@ def resolve_channel(key):
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(f"https://www.youtube.com/watch?v={vid}", download=False, process=False)
             if info.get("channel_id"):
-                return library.upsert_channel(info["channel_id"], ch.get("name") or info.get("channel"),
-                                              url=channel_base(info.get("channel_url") or ""))
+                found[info["channel_id"]] = info
         except Exception:
             continue
+    if len(found) == 1:
+        info = next(iter(found.values()))
+        return library.upsert_channel(info["channel_id"], ch.get("name") or info.get("channel"),
+                                      url=channel_base(info.get("channel_url") or ""))
+    if len(found) > 1:
+        library.set_meta("mixed:" + key, "1")     # a folder with several channels: never merge it into one
     return key
 
 
@@ -1287,6 +1363,10 @@ def sync_channel(key, download=True, opts=None):
             sync_state.pop(old, None)
             sync_state[old] = {"state": "moved", "to": key}
     ch = library.get_channel(key)
+    if library.get_meta("mixed:" + key):
+        sync_state[key] = {"state": "error", "error": "This folder holds videos from several channels, so it cannot be "
+                           "checked as one channel. Open the channel you want in Browse instead."}
+        return sync_state[key]
     if not ch or not ch.get("url"):
         sync_state[key] = {"state": "error", "error": "No address saved for this channel. Open it from Browse once."}
         return sync_state[key]

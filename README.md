@@ -9,6 +9,13 @@ Public videos never need a sign-in, so keep **Settings > Sign-in** set to **Off*
 - Click **Test sign-in** to check the source right away.
 - If a sign-in can't be read, downloads **continue without it** and a banner explains what happened. Downloads no longer fail because of this.
 
+## The download list
+- **What you ask for last downloads first.** A new request goes to the front of the queue, and older unfinished items wait behind it. Every waiting item shows its place ("Number 3 in line").
+- **One row per channel** when several channels are in the list, each with **Download first**, **Pause**, **Resume** and **Remove**. Click a channel's name to show only that channel.
+- **Download next** on any waiting item moves it to the front.
+- **Clear finished**, **Clear failed** and **Clear all** empty the list. Clear all stops running downloads. Files already downloaded are never deleted.
+- **No internet?** Downloads wait ("Waiting for internet connection") and continue by themselves when the connection is back. No attempts are wasted.
+
 ## Reliability and extra options
 - **Clear errors.** Messages such as "private video", "members only", "age-restricted", "not available in your country", "live stream not started" or "disk full" explain what to do.
 - **Automatic retries.** Network problems and YouTube rate limits are retried up to 3 times, with growing waits.

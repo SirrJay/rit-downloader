@@ -660,14 +660,16 @@ function jobActs(j) {
   const b = (a, label, cls = "btn sm ghost") => `<button class="${cls}" data-jact="${a}">${esc(t(label))}</button>`;
   switch (j.status) {
     case "running": return b("pause", "Pause") + b("cancel", "Cancel");
-    case "queued": return b("pause", "Pause") + b("cancel", "Remove");
-    case "paused": return b("resume", "Resume", "btn sm") + b("remove", "Remove");
+    case "queued": return b("top", "Download next") + b("pause", "Pause") + b("cancel", "Remove");
+    case "paused": return b("resume", "Resume", "btn sm") + b("top", "Download next") + b("remove", "Remove");
     case "error": return b("retry", "Retry", "btn sm") + b("remove", "Remove");
     case "canceled": return b("retry", "Retry", "btn sm") + b("remove", "Remove");
     default: return (j.filepath ? b("play", "Open", "btn sm") + b("show", "Show in folder") : "") + b("remove", "Remove");
   }
 }
+const jobChan = (j) => j.channel || j.group || "";
 function jobVisible(j) {
+  if (S.jobChannel !== undefined && S.jobChannel !== null && jobChan(j) !== S.jobChannel) return false;
   const q = ($("#jobFilter").value || "").trim().toLowerCase();
   const f = $("#jobStatusFilter").value;
   if (q && !((j.title || "") + " " + (j.channel || "") + " " + (j.group || "")).toLowerCase().includes(q)) return false;
@@ -678,11 +680,66 @@ function jobVisible(j) {
 }
 ["#jobFilter", "#jobStatusFilter"].forEach((s) => $(s).addEventListener("input", () => pollJobs()));
 
+function renderChannelStrip(jobs) {
+  const groups = new Map();
+  for (const jb of jobs) {
+    const k = jobChan(jb);
+    const g = groups.get(k) || { name: k, running: 0, queued: 0, paused: 0, done: 0, error: 0, ids: [], batch: 0 };
+    if (jb.status === "running") g.running++;
+    else if (jb.status === "queued") g.queued++;
+    else if (jb.status === "paused") g.paused++;
+    else if (jb.status === "done" || jb.status === "skipped") g.done++;
+    else if (jb.status === "error") g.error++;
+    if (["running", "queued", "paused", "error", "canceled"].includes(jb.status)) g.ids.push(jb.id);
+    g.batch = Math.max(g.batch, jb.batch || 0);
+    groups.set(k, g);
+  }
+  const list = [...groups.values()].filter((g) => g.running + g.queued + g.paused + g.error > 0)
+    .sort((a, b) => (b.running - a.running) || (b.batch - a.batch));
+  const box = $("#dlChannels");
+  if (S.jobChannel != null && !groups.has(S.jobChannel)) S.jobChannel = null;
+  if (list.length < 2 && S.jobChannel == null) { box.innerHTML = ""; return; }
+  box.innerHTML = list.map((g) => {
+    const total = g.running + g.queued + g.paused + g.done + g.error;
+    const pct = total ? Math.round(100 * g.done / total) : 0;
+    const parts = [];
+    if (g.running) parts.push(`<b>${g.running}</b> ${esc(t("Downloading"))}`);
+    if (g.queued) parts.push(`<b>${g.queued}</b> ${esc(t("Waiting"))}`);
+    if (g.paused) parts.push(`<b>${g.paused}</b> ${esc(t("Paused"))}`);
+    if (g.error) parts.push(`<b>${g.error}</b> ${esc(t("Failed"))}`);
+    parts.push(`<b>${g.done}</b> ${esc(t("Done"))}`);
+    const key = esc(g.name);
+    return `<div class="dlch${S.jobChannel === g.name ? " on" : ""}" data-ch="${key}">
+      <span class="nm" data-chact="filter" title="${esc(t("Show only this channel"))}">${esc(g.name || t("Other"))}</span>
+      <span class="cnt">${parts.join(" · ")}</span>
+      <div class="bar"><i style="width:${pct}%"></i></div>
+      <button class="btn sm" data-chact="top" title="${esc(t("Download this channel before the others"))}">${esc(t("Download first"))}</button>
+      ${g.running + g.queued ? `<button class="btn sm ghost" data-chact="pause">${esc(t("Pause"))}</button>` : ""}
+      ${g.paused || g.error ? `<button class="btn sm ghost" data-chact="resume">${esc(t("Resume"))}</button>` : ""}
+      <button class="btn sm ghost" data-chact="remove" title="${esc(t("Remove this channel's unfinished downloads from the list"))}">${esc(t("Remove"))}</button>
+    </div>`;
+  }).join("");
+  box._groups = groups;
+}
+$("#dlChannels").addEventListener("click", async (ev) => {
+  const b = ev.target.closest("[data-chact]"); if (!b) return;
+  const name = b.closest(".dlch").dataset.ch;
+  const g = ($("#dlChannels")._groups || new Map()).get(name); if (!g) return;
+  const act = b.dataset.chact;
+  if (act === "filter") { S.jobChannel = S.jobChannel === name ? null : name; return pollJobs(); }
+  if (act === "remove" && !confirmInline(t("Remove {n} unfinished downloads of {name} from the list?", { n: g.ids.length, name: name || t("Other") }))) return;
+  await api("jobs/action", { ids: g.ids, action: act === "remove" ? "cancel" : act });
+  if (act === "remove") await api("jobs/action", { ids: g.ids, action: "remove" });
+  if (act === "top") toast(t("{name} will download next.", { name: name || t("Other") }), "ok");
+  pollJobs();
+});
+
 function renderBanners() {
   const sys = S.sys || {}, box = $("#dlBanners"); if (!box) return;
   const out = [];
   const ck = sys.cookies;
   if (ck && !ck.ok) out.push(["warn", t("Your sign-in from {name} could not be read, so downloads continue without it. Public videos are not affected.", { name: ck.name }), "fixcookies", t("Fix sign-in")]);
+  if (sys.hold === "offline") out.push(["warn", t("No internet connection. Downloads continue automatically when you are back online."), "", ""]);
   if (sys.hold === "disk") out.push(["warn", t("Downloads are paused because the disk is almost full. Free up space, then click Resume all."), "", ""]);
   if (sys.hold === "schedule" && sys.window) out.push(["info", t("Downloads wait for your download hours ({from} to {to}).", { from: sys.window[0], to: sys.window[1] }), "", ""]);
   if (sys.power) {
@@ -720,7 +777,9 @@ async function pollJobs() {
   const existing = new Map($$(".job", box).map((el) => [el.dataset.id, el]));
   // newest first, but keep running at top
   const order = { running: 0, queued: 1, paused: 2, error: 3, canceled: 4, done: 5, skipped: 5 };
-  jobs.sort((a, b) => (order[a.status] - order[b.status]) || (a.status === "queued" ? a.created - b.created : b.created - a.created));
+  jobs.sort((a, b) => (order[a.status] - order[b.status]) ||
+    (a.status === "queued" ? (a.position || 1e9) - (b.position || 1e9) : (b.finished || b.created) - (a.finished || a.created)));
+  renderChannelStrip(jobs);
   let prev = null;
   for (const j of jobs) {
     let el = existing.get(j.id);
@@ -734,6 +793,7 @@ async function pollJobs() {
     el.querySelector(".tag").textContent = jobFmt(j);
     const st = el.querySelector(".st"); st.className = "st " + j.status; st.textContent = t(STATUS_LABEL[j.status] || j.status);
     let info = j.stage ? t(j.stage) : "";
+    if (j.status === "queued" && j.position && !j.retry_at && j.stage !== "Waiting for internet connection...") info = t("Number {n} in line", { n: j.position }) + (info ? " · " + info : "");
     if (j.status === "running" && j.total) {
       info = `${info} · ${t("{p}% of {size}", { p: Math.round(j.percent), size: fmtBytes(j.total) })}${j.speed ? " · " + fmtBytes(j.speed) + "/s" : ""}${j.eta != null ? " · " + t("{t} left", { t: fmtDur(j.eta) }) : ""}`;
     }
@@ -764,7 +824,8 @@ $("#jobs").addEventListener("click", async (ev) => {
 $$("[data-all]").forEach((b) => b.addEventListener("click", async () => {
   const a = b.dataset.all;
   if (a === "cancel" && !confirmInline(t("Cancel every download?"))) return;
-  const ids = a === "clear" ? [] : "all";
+  if (a === "clear_all" && !confirmInline(t("Empty the whole download list? Downloads in progress stop. Files already downloaded stay on disk."))) return;
+  const ids = a.startsWith("clear") ? [] : "all";
   await api("jobs/action", { ids, action: a });
   pollJobs();
 }));
@@ -904,7 +965,7 @@ function libRow(c) {
   const sy = c.sync || {};
   let status = "";
   if (sy.state === "checking") status = `<span class="pill"><span class="spin"></span> ${esc(t("Checking..."))}</span>`;
-  else if (sy.state === "error") status = `<span class="pill err" title="${esc(sy.error || "")}">${esc(t("Error"))}</span>`;
+  else if (sy.state === "error") status = `<span class="pill err" title="${esc(t(sy.error || ""))}">${esc(t("Error"))}</span>`;
   else if (sy.state === "done") status = sy.queued ? `<span class="pill new">${esc(t("Found {n} new videos. Added to downloads.", { n: sy.queued }))}</span>` :
     sy.new ? `<span class="pill new">${esc(t("{n} new", { n: sy.new }))}</span>` : `<span class="pill ok">${esc(t("Up to date"))}</span>`;
   else if (c.new_count) status = `<span class="pill new">${esc(t("{n} new", { n: c.new_count }))}</span>`;
