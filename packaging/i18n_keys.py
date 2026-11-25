@@ -79,7 +79,7 @@ def js_keys():
     for m in re.finditer(r'\bt\(audio \? "([^"]+)" : "([^"]+)"', src):
         keys += [m.group(1), m.group(2)]
     # tables of labels that are passed through t() at runtime
-    for block in ("PLACEHOLDER", "STATUS_LABEL", "AUTH_ERR"):
+    for block in ("PLACEHOLDER", "STATUS_LABEL", "AUTH_ERR", "COOKIE_ERR"):
         m = re.search(block + r"\s*=\s*\{(.*?)\};", src, re.S)
         keys += re.findall(r':\s*"([^"]+)"', m.group(1))
     m = re.search(r"const labels = \[(.*?)\];", src, re.S)
@@ -103,14 +103,26 @@ SAME_IN_ALL = {"Rit Downloader", "Rit", "Downloader", "YouTube", "SoundCloud", "
                "320 kbps", "256 kbps", "192 kbps", "96 kbps", "500 KB/s", "1 MB/s", "2 MB/s", "5 MB/s", "en.*,fr",
                "Shorts", "{h} h {m} min", "{m} min", "Codec", "App", "Video", "Audio", "Playlist", "Playlists",
                "Date", "Source", "Bitrate", "Grid", "1 item", "LIVE", "Error", "Pause", "Downloads", "Videos",
-               "Channel", "audio", "stream", "Downloading", "5 minutes", "15 minutes", "30 minutes"}
+               "Channel", "audio", "stream", "Downloading", "5 minutes", "15 minutes", "30 minutes",
+               "Vivaldi", "1 GB", "2 GB", "5 GB", "10 GB", "20 GB", "http://host:port"}
+
+
+def engine_keys():
+    """Plain-language error and status messages produced by app/engine.py (shown through t())."""
+    src = open(os.path.join(ROOT, "app", "engine.py"), encoding="utf-8").read()
+    m = re.search(r"ERROR_RULES = \[(.*?)\n\]", src, re.S)
+    keys = re.findall(r'"([A-Z][^"]+\.)"\),', m.group(1)) if m else []
+    for line in src.splitlines():                 # status lines shown in the Downloads list
+        if ".stage" in line and "=" in line and "Merger" not in line:
+            keys += [k for k in re.findall(r'"([^"]+)"', line) if k[:1].isupper()]
+    return [k for k in keys if "{" not in k]
 
 
 def collect():
     c = Collector()
     c.feed(open(os.path.join(STATIC, "index.html"), encoding="utf-8").read())
     seen, out = set(), []
-    for k in c.keys + js_keys() + ENGINE:
+    for k in c.keys + js_keys() + ENGINE + engine_keys():
         if k not in seen:
             seen.add(k)
             out.append(k)

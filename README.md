@@ -2,6 +2,25 @@
 
 Search YouTube (and other sites), load every video a person or channel has published, and download them one at a time or in bulk, as video or audio, in the quality you choose.
 
+## Sign-in for restricted videos ("Could not copy Chrome cookie database")
+Public videos never need a sign-in, so keep **Settings > Sign-in** set to **Off** unless you download age-restricted, members-only or private videos.
+- **On Windows, Chrome and Edge can't be used for sign-in.** They lock their sign-in data while open and encrypt it even when closed. That causes the error "Could not copy Chrome cookie database".
+- **What works:** **Firefox** (signed in to YouTube), or a **cookies.txt file**. To get one, install the free browser extension "Get cookies.txt LOCALLY", open youtube.com while signed in, click Export, then choose the file in Settings > Sign-in.
+- Click **Test sign-in** to check the source right away.
+- If a sign-in can't be read, downloads **continue without it** and a banner explains what happened. Downloads no longer fail because of this.
+
+## Reliability and extra options
+- **Clear errors.** Messages such as "private video", "members only", "age-restricted", "not available in your country", "live stream not started" or "disk full" explain what to do.
+- **Automatic retries.** Network problems and YouTube rate limits are retried up to 3 times, with growing waits.
+- **Disk guard.** Downloads pause before the disk fills up. You choose how much space to keep free.
+- **Download hours.** Download only during set hours, such as cheap night-time data.
+- **When finished.** Optionally put the computer to sleep or shut it down. You get 2 minutes to cancel, and the option resets after each use.
+- **Notifications** when downloads finish, via the tray or menu-bar icon.
+- **Part of a video.** Open a video's quality list and set "Only from … to …" to keep, for example, just the sermon.
+- **Even out the volume** of audio downloads, which helps with live-recorded sermons.
+- **Proxy** support, plus a search box and filter in Downloads.
+- **Skip short clips** when getting new videos from a channel (Library).
+
 ## No duplicates, and every channel keeps its own folder
 - **Library**: Rit Downloader remembers every file you've downloaded, in any folder. Videos you already have are marked **Downloaded** with a green tick, and they're skipped automatically. They're never queued twice, even from the browser extension.
 - **One folder per channel**: each channel's videos always go to that channel's folder. The folder stays the same even if you change the download folder later. You can move a channel's folder in **Library > Change folder**.

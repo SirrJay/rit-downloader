@@ -1,5 +1,6 @@
 """Core engine: searching / listing media and a threaded download queue built on yt-dlp."""
 import json
+import re
 import os
 import shutil
 import string
@@ -134,6 +135,18 @@ DEFAULTS = {
     "redownload_deleted": False,
     "sync_hours": 12,
     "cookies_browser": "",
+    "cookies_file": "",
+    "proxy": "",
+    "auto_retry": True,
+    "min_free_gb": 2,
+    "schedule_enabled": False,
+    "schedule_start": "00:00",
+    "schedule_end": "06:00",
+    "after_done": "nothing",
+    "notify_done": True,
+    "normalize_audio": False,
+    "min_minutes_sync": 0,
+    "history_limit": 3000,
     "search_limit": 50,
     "theme": "dark",
     "language": "",
@@ -178,27 +191,105 @@ settings = Settings()
 # --------------------------------------------------------------------------- yt-dlp option building
 
 
-def base_args(s):
+_cookie_cache = {}
+_cookie_lock = threading.Lock()
+BROWSER_NAMES = {"chrome": "Chrome", "edge": "Microsoft Edge", "firefox": "Firefox", "brave": "Brave",
+                 "opera": "Opera", "vivaldi": "Vivaldi", "chromium": "Chromium", "safari": "Safari"}
+
+
+def cookie_source(s):
+    if s.get("cookies_file"):
+        return ("file", s["cookies_file"])
+    if s.get("cookies_browser"):
+        return ("browser", s["cookies_browser"])
+    return None
+
+
+def cookie_check(s, force=False):
+    """Can the chosen sign-in source actually be read? Cached for 10 minutes.
+    Returns None when sign-in is off, else {"ok", "kind", "name", "count", "youtube", "error"}."""
+    src = cookie_source(s)
+    if not src:
+        return None
+    with _cookie_lock:
+        c = _cookie_cache.get(src)
+        if c and not force and time.time() - c["ts"] < 600:
+            return c
+        kind, val = src
+        name = os.path.basename(val) if kind == "file" else BROWSER_NAMES.get(val, val.title())
+        res = {"ok": False, "kind": kind, "name": name, "count": 0, "youtube": 0, "error": "", "ts": time.time()}
+        try:
+            from yt_dlp.cookies import load_cookies
+            if kind == "file" and not os.path.isfile(val):
+                raise FileNotFoundError(val)
+            ydl = yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "logger": _QuietLogger()})
+            jar = load_cookies(val if kind == "file" else None, (val, None, None, None) if kind == "browser" else None, ydl)
+            res["count"] = len(jar)
+            res["youtube"] = sum(1 for ck in jar if "youtube" in (ck.domain or "") or "google" in (ck.domain or ""))
+            res["ok"] = True
+        except FileNotFoundError:
+            res["error"] = "file_missing"
+        except Exception as ex:
+            m = str(ex).lower()
+            res["error"] = "locked" if ("could not copy" in m or "locked" in m or "permission" in m) else \
+                ("decrypt" if "decrypt" in m or "dpapi" in m or "app-bound" in m else "unreadable")
+        _cookie_cache[src] = res
+        return res
+
+
+def cookie_failed(s):
+    """Called when a download hit a cookie error mid-way: remember it so later downloads skip the sign-in."""
+    src = cookie_source(s)
+    if src:
+        with _cookie_lock:
+            c = _cookie_cache.get(src) or {"kind": src[0], "name": src[1], "count": 0, "youtube": 0}
+            c.update({"ok": False, "error": c.get("error") or "locked", "ts": time.time()})
+            _cookie_cache[src] = c
+
+
+def is_cookie_error(msg):
+    m = str(msg or "").lower()
+    return "cookie" in m and ("could not copy" in m or "failed to load" in m or "decrypt" in m
+                              or "database" in m or "could not find" in m)
+
+
+def cookie_args(s, no_cookies=False):
+    if no_cookies:
+        return []
+    st = cookie_check(s)
+    if not st or not st["ok"]:
+        return []                      # unreadable sign-in: continue without it instead of failing
+    kind, val = cookie_source(s)
+    return ["--cookies", val] if kind == "file" else ["--cookies-from-browser", val]
+
+
+def base_args(s, no_cookies=False):
     # --remote-components lets yt-dlp fetch a newer YouTube challenge solver from GitHub
     # if the bundled one is out of date.
     a = js_runtime_args() + ["--remote-components", "ejs:github", "--no-color"]
     ff = paths.ffmpeg_dir()
     if ff:
         a += ["--ffmpeg-location", ff]
-    if s.get("cookies_browser"):
-        a += ["--cookies-from-browser", s["cookies_browser"]]
-    return a
+    if s.get("proxy"):
+        a += ["--proxy", str(s["proxy"]).strip()]
+    return a + cookie_args(s, no_cookies)
 
 
-def file_name_template(s):
-    name = "%(title).150B [%(id)s].%(ext)s"
+def file_name_template(s, section=None):
+    if section:
+        tag = re.sub(r"[^0-9.-]", ".", section)
+        name = f"%(title).140B [%(id)s] (part {tag}).%(ext)s"   # never mistaken for the full video
+    else:
+        name = "%(title).150B [%(id)s].%(ext)s"
     if s.get("date_prefix"):
         name = "%(upload_date>%Y-%m-%d&{} - |)s" + name
     return name
 
 
-def build_download_args(s, group=None, format_id=None):
-    a = base_args(s)
+def build_download_args(s, group=None, format_id=None, no_cookies=False, section=None):
+    a = base_args(s, no_cookies)
+    if section:
+        a += ["--download-sections", "*" + section]
     a += ["--no-playlist", "--retries", "10", "--fragment-retries", "10",
           "--concurrent-fragments", str(int(s.get("fragments") or 1))]
     if s.get("rate_limit"):
@@ -219,6 +310,9 @@ def build_download_args(s, group=None, format_id=None):
               ("vorbis" if fmt == "ogg" else fmt)]
         q = str(s.get("audio_quality") or "0")
         a += ["--audio-quality", q if q == "0" else q + "K"]
+        if s.get("normalize_audio") and fmt != "original":
+            # even out loud / quiet parts (great for sermons recorded live)
+            a += ["--postprocessor-args", "ExtractAudio+ffmpeg_o:-af loudnorm=I=-16:TP=-1.5:LRA=11"]
         thumb_ok = fmt not in ("wav", "aac")
         if s.get("subtitles"):
             a += ["--write-subs", "--sub-langs", s.get("sub_langs") or "en.*", "--convert-subs", "srt"]
@@ -541,11 +635,49 @@ class _QuietLogger:
 def clean_error(ex):
     msg = str(ex)
     msg = msg.replace("\x1b[0;31mERROR:\x1b[0m ", "").replace("ERROR: ", "")
-    if "logged-in" in msg or "login" in msg.lower() or "cookies" in msg:
-        msg = msg.split(". Use --cookies")[0] + ".  (Tip: sign in to the site in your browser, then turn on Settings > Sign-in > 'Use cookies from a browser'.)"
-    elif "Sign in to confirm" in msg:
-        msg += "  (Tip: Settings > 'Use cookies from browser' can help.)"
-    return msg.strip()[:600]
+    code, friendly = classify_error(msg)
+    return friendly if code != "other" else msg.strip()[:600]
+
+
+# (code, friendly message) - the messages are translated in the interface
+ERROR_RULES = [
+    ("cookies", ("could not copy chrome cookie", "could not copy", "failed to load cookies", "failed to decrypt"),
+     "Your browser sign-in could not be read. Downloads now continue without it. See Settings > Sign-in."),
+    ("bot", ("not a bot", "confirm you're not", "confirm you’re not"),
+     "YouTube asked to confirm you're not a robot. The app will try again later. A longer pause between downloads, or a sign-in, helps."),
+    ("ratelimit", ("http error 429", "too many requests", "rate-limit", "rate limit"),
+     "YouTube is limiting downloads for now. The app will try again automatically."),
+    ("format", ("requested format is not available", "format is not available"),
+     "The chosen quality is not available for this video. Pick another quality."),
+    ("private", ("private video", "video is private"), "This video is private."),
+    ("members", ("members-only", "join this channel", "members only"),
+     "This video is only for channel members. It needs a sign-in from an account with access."),
+    ("age", ("confirm your age", "age-restricted", "age restricted", "inappropriate for some users"),
+     "This video is age-restricted. It needs a sign-in (Settings > Sign-in)."),
+    ("upcoming", ("premieres in", "will begin in", "live event will begin", "is_upcoming", "this live event"),
+     "This live stream has not started yet."),
+    ("live", ("is live now", "currently live"), "This video is live right now. Try again after the stream ends."),
+    ("geo", ("not available in your country", "geo restrict", "geo-restrict", "blocked it in your country"),
+     "This video is not available in your country."),
+    ("unavailable", ("video unavailable", "has been removed", "not available", "does not exist", "account associated"),
+     "This video is unavailable or was removed."),
+    ("disk", ("no space left", "errno 28", "disk full", "not enough space"), "The disk is full."),
+    ("ffmpeg", ("ffmpeg not found", "ffprobe not found", "ffmpeg is not installed"),
+     "Video tools (ffmpeg) are missing. Use Settings > Repair."),
+    ("network", ("getaddrinfo", "timed out", "timeout", "connection reset", "connection aborted", "errno 11001",
+                 "remote end closed", "network is unreachable", "temporary failure", "unable to download webpage",
+                 "connection refused", "ssl", "incompleteread", "read error"),
+     "Network problem. The app will try again automatically."),
+]
+RETRYABLE = {"network": 30, "ratelimit": 180, "bot": 600}
+
+
+def classify_error(msg):
+    m = str(msg or "").lower()
+    for code, needles, friendly in ERROR_RULES:
+        if any(nd in m for nd in needles):
+            return code, friendly
+    return "other", str(msg or "").strip()[:600]
 
 
 # --------------------------------------------------------------------------- formats (quality list)
@@ -603,7 +735,8 @@ def get_formats(url):
 class Job:
     FIELDS = ("id", "url", "title", "thumb", "group", "format_id", "opts", "status", "percent",
               "speed", "eta", "downloaded", "total", "stage", "filepath", "error", "created",
-              "finished", "channel", "duration", "vid", "site", "channel_id", "force")
+              "finished", "channel", "duration", "vid", "site", "channel_id", "force",
+              "section", "attempts", "retry_at", "error_raw")
 
     def __init__(self, url, title="", thumb="", group=None, format_id=None, opts=None,
                  channel="", duration=None):
@@ -622,6 +755,10 @@ class Job:
         self.stop_reason = None  # 'cancel' | 'pause'
         self.vid = self.site = self.channel_id = None
         self.force = False
+        self.section = None          # "HH:MM:SS-HH:MM:SS" = download only that part
+        self.attempts = 0
+        self.retry_at = None
+        self.error_raw = None
 
     def to_dict(self):
         return {k: getattr(self, k) for k in self.FIELDS}
@@ -669,6 +806,11 @@ class Manager:
         self.cv = threading.Condition(self.lock)
         self.running = 0
         self._dirty = False
+        self.hold = None             # "disk" -> stop starting downloads until the user resumes
+        self.hold_reason = None      # "disk" | "schedule" (shown in the interface)
+        self.batch_active = False
+        self.batch_start = 0
+        self.last_batch = None
         self._load()
         threading.Thread(target=self._scheduler, daemon=True).start()
         threading.Thread(target=self._saver, daemon=True).start()
@@ -681,6 +823,9 @@ class Manager:
                     j = Job.from_dict(d)
                     if j.status in ("running", "queued"):
                         j.status, j.stage = "paused", "Paused (app was closed)"
+                    elif j.status == "error" and is_cookie_error(j.error):
+                        # failed only because the browser sign-in could not be read (fixed in 1.2)
+                        j.status, j.stage, j.error = "paused", "Ready to retry: the sign-in problem is fixed", None
                     self.jobs.append(j)
         except Exception:
             pass
@@ -731,7 +876,7 @@ class Manager:
                 if (url, it.get("format_id"), mode) in active or (vid and (vid, mode) in active):
                     queued += 1
                     continue
-                if skip_known and vid and library.is_downloaded(vid, mode, redl):
+                if skip_known and vid and not it.get("section") and library.is_downloaded(vid, mode, redl):
                     already += 1
                     continue
                 active.add((url, it.get("format_id"), mode))
@@ -740,10 +885,36 @@ class Manager:
                 j = Job(url, it.get("title"), it.get("thumb"), it.get("group") or group,
                         it.get("format_id"), dict(s), it.get("channel", ""), it.get("duration"))
                 j.vid, j.site, j.channel_id, j.force = vid, it.get("site"), it.get("channel_id"), bool(force)
+                j.section = it.get("section") or None
                 self.jobs.append(j)
                 added += 1
+            if added:
+                self._start_batch()
+            self._trim_history(s.get("history_limit") or 3000)
         self.touch()
         return {"added": added, "already": already, "queued": queued}
+
+    def _start_batch(self):
+        if not self.batch_active:
+            self.batch_active = True
+            self.batch_start = time.time()
+
+    def _trim_history(self, limit):
+        done = [j for j in self.jobs if j.status in ("done", "skipped", "canceled")]
+        if len(done) > limit:
+            drop = set(id(j) for j in sorted(done, key=lambda j: j.finished or j.created)[:len(done) - limit])
+            self.jobs = [j for j in self.jobs if id(j) not in drop]
+
+    def _check_batch_done(self):
+        if not self.batch_active:
+            return
+        if any(j.status in ("queued", "running") for j in self.jobs):
+            return
+        self.batch_active = False
+        batch = [j for j in self.jobs if (j.finished or 0) >= self.batch_start]
+        stats = {k: sum(1 for j in batch if j.status == k) for k in ("done", "skipped", "error", "canceled", "paused")}
+        self.last_batch = {**stats, "at": time.time()}
+        threading.Thread(target=on_batch_finished, args=(stats,), daemon=True).start()
 
     def list(self):
         with self.lock:
@@ -766,7 +937,9 @@ class Manager:
                 elif act in ("resume", "retry"):
                     if j.status in ("paused", "error", "canceled") or (act == "retry" and j.status == "error"):
                         j.status, j.stage, j.error, j.stop_reason = "queued", "", None, None
-                        j.percent = 0
+                        j.percent, j.attempts, j.retry_at, j.error_raw = 0, 0, None, None
+                        self.hold = None
+                        self._start_batch()
                 elif act == "remove":
                     if j.status == "running":
                         j.stop_reason = "cancel"
@@ -788,11 +961,15 @@ class Manager:
     def _scheduler(self):
         while True:
             with self.cv:
-                limit = max(1, min(8, int(settings.get().get("concurrency") or 1)))
+                st = settings.get()
+                limit = max(1, min(8, int(st.get("concurrency") or 1)))
                 nxt = None
-                if self.running < limit:
-                    nxt = next((j for j in self.jobs if j.status == "queued"), None)
+                self.hold_reason = self.hold or ("schedule" if st.get("schedule_enabled") and not in_window(st) else None)
+                if not self.hold_reason and self.running < limit:
+                    now = time.time()
+                    nxt = next((j for j in self.jobs if j.status == "queued" and (j.retry_at or 0) <= now), None)
                 if nxt is None:
+                    self._check_batch_done()
                     self.cv.wait(timeout=1.0)
                     continue
                 nxt.status, nxt.stage, nxt.percent = "running", "Starting...", 0
@@ -802,50 +979,17 @@ class Manager:
     def _run(self, job):
         job.skipped = False
         job.last_error = None
+        s = {}
         try:
             s = dict(job.opts)
-            # always use the current folder/cookies so restored jobs follow settings changes
+            # always use the current folder/sign-in/network settings so restored jobs follow changes
             cur = settings.get()
-            for k in ("download_dir", "cookies_browser", "rate_limit", "fragments"):
+            for k in ("download_dir", "cookies_browser", "cookies_file", "proxy", "rate_limit", "fragments",
+                      "normalize_audio", "min_free_gb", "archive", "redownload_deleted", "organize", "date_prefix"):
                 s[k] = cur.get(k)
             os.makedirs(s["download_dir"], exist_ok=True)
-            opts = ydl_opts_from_args(build_download_args(s, job.group, job.format_id))
-
-            def hook(d):
-                if job.stop_reason:
-                    raise DownloadCancelled()
-                if d["status"] == "downloading":
-                    tb = d.get("total_bytes") or d.get("total_bytes_estimate")
-                    db = d.get("downloaded_bytes") or 0
-                    job.downloaded, job.total = db, tb
-                    job.percent = round(db * 100 / tb, 1) if tb else job.percent
-                    job.speed, job.eta = d.get("speed"), d.get("eta")
-                    inf = d.get("info_dict") or {}
-                    vc = inf.get("vcodec") or "none"
-                    part = "video stream" if vc != "none" and (inf.get("acodec") or "none") == "none" else \
-                        ("audio stream" if vc == "none" else "file")
-                    job.stage = f"Downloading {part}"
-                elif d["status"] == "finished":
-                    job.stage = "Processing..."
-
-            def pp_hook(d):
-                if d["status"] == "started":
-                    name = d.get("postprocessor", "")
-                    job.stage = {"Merger": "Merging video + audio...", "ExtractAudio": "Converting audio...",
-                                 "EmbedThumbnail": "Embedding cover art...", "FFmpegMetadata": "Writing metadata...",
-                                 "VideoConvertor": "Converting video (may take a while)...",
-                                 "VideoRemuxer": "Remuxing..."}.get(name, f"{name}...")
-                fp = (d.get("info_dict") or {}).get("filepath")
-                if fp:
-                    job.filepath = fp
-
-            opts.update({"progress_hooks": [hook], "postprocessor_hooks": [pp_hook],
-                         "logger": JobLogger(job), "quiet": True, "noprogress": True})
-            sleep = float(s.get("sleep_interval") or 0)
-            if sleep > 0:
-                opts["sleep_interval"] = sleep
             mode = s.get("mode") or "video"
-            skip_known = s.get("archive", True) and not job.force
+            skip_known = s.get("archive", True) and not job.force and not job.section
             redl = s.get("redownload_deleted")
             # 1) known id: skip without touching the network
             if skip_known and job.vid:
@@ -854,43 +998,26 @@ class Manager:
                     job.filepath = have if isinstance(have, str) else job.filepath
                     job.status, job.stage, job.percent = "skipped", "Already downloaded (skipped)", 100
                     return
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                # 2) identify the video (real id + channel), then decide skip / folder
-                job.stage = "Starting..."
-                info = ydl.extract_info(job.url, download=False, process=False)
-                hops = 0
-                while info and info.get("_type") == "url" and hops < 3:
-                    info = ydl.extract_info(info["url"], download=False, process=False, ie_key=info.get("ie_key"))
-                    hops += 1
-                if job.stop_reason:
-                    raise DownloadCancelled()
-                vid = info.get("id") or job.vid
-                job.vid = vid
-                job.site = info.get("extractor_key") or job.site
-                job.channel_id = info.get("channel_id") or job.channel_id
-                ch_name = info.get("channel") or info.get("uploader") or job.channel or ""
-                job.channel = ch_name
-                job.title = info.get("title") or job.title
-                if not job.thumb:
-                    job.thumb = info.get("thumbnail") or ""
-                if skip_known:
-                    have = library.is_downloaded(vid, mode, redl)
-                    if have:
-                        job.filepath = have if isinstance(have, str) else job.filepath
-                        job.status, job.stage, job.percent = "skipped", "Already downloaded (skipped)", 100
-                        return
-                folder = target_folder(s, job, ch_name)
-                os.makedirs(folder, exist_ok=True)
-                ydl.params["outtmpl"]["default"] = os.path.join(folder.replace("%", "%%"), file_name_template(s))
-                # 3) download
-                info = ydl.process_ie_result(info, download=True)
-                if info:
-                    rd = info.get("requested_downloads") or []
-                    if rd and rd[-1].get("filepath"):
-                        job.filepath = rd[-1]["filepath"]
+            info = None
+            for attempt in (0, 1):
+                try:
+                    info = self._download(job, s, mode, skip_known, redl, no_cookies=attempt == 1)
+                    break
+                except DownloadCancelled:
+                    raise
+                except Exception as ex:
+                    if attempt == 0 and (is_cookie_error(ex) or is_cookie_error(job.last_error)):
+                        # sign-in could not be read: remember that and try again without it
+                        cookie_failed(s)
+                        job.last_error = None
+                        job.stage = "Sign-in unavailable, continuing without it..."
+                        continue
+                    raise
+            if job.status == "skipped":
+                return
             if job.stop_reason:
                 raise DownloadCancelled()
-            if job.filepath and os.path.isfile(job.filepath):
+            if job.filepath and os.path.isfile(job.filepath) and not job.section:
                 library.record(job.vid, mode, extractor=job.site, filepath=job.filepath, title=job.title,
                                channel_id=job.channel_id, channel=job.channel,
                                upload_date=(info or {}).get("upload_date"))
@@ -902,18 +1029,32 @@ class Manager:
             else:
                 job.status, job.stage = "done", "Completed"
             job.percent = 100
+            job.error = job.error_raw = None
         except DownloadCancelled:
             if job.stop_reason == "pause":
                 job.status, job.stage = "paused", "Paused"
             else:
                 job.status, job.stage = "canceled", "Canceled"
+        except DiskLow:
+            job.status, job.stage = "paused", "Paused: not enough disk space"
+            self.hold = "disk"
         except Exception as ex:
             if job.stop_reason:
                 job.status = "paused" if job.stop_reason == "pause" else "canceled"
                 job.stage = job.status.title()
             else:
-                job.status, job.stage = "error", "Failed"
-                job.error = clean_error(job.last_error or ex)
+                raw = str(job.last_error or ex).replace("\x1b[0;31mERROR:\x1b[0m ", "").replace("ERROR: ", "").strip()
+                code, friendly = classify_error(raw)
+                job.error, job.error_raw = friendly, raw[:800]
+                if code == "disk":
+                    job.status, job.stage = "paused", "Paused: not enough disk space"
+                    self.hold = "disk"
+                elif code in RETRYABLE and s.get("auto_retry", True) and job.attempts < 3:
+                    job.attempts += 1
+                    job.retry_at = time.time() + RETRYABLE[code] * job.attempts
+                    job.status, job.stage = "queued", "Waiting to retry..."
+                else:
+                    job.status, job.stage = "error", "Failed"
         finally:
             job.finished = time.time()
             job.speed = job.eta = None
@@ -923,6 +1064,161 @@ class Manager:
                 if getattr(job, "remove_after", False) and job in self.jobs:
                     self.jobs.remove(job)
             self.touch()
+
+    def _download(self, job, s, mode, skip_known, redl, no_cookies=False):
+        opts = ydl_opts_from_args(build_download_args(s, job.group, job.format_id, no_cookies, job.section))
+
+        def hook(d):
+            if job.stop_reason:
+                raise DownloadCancelled()
+            if d["status"] == "downloading":
+                tb = d.get("total_bytes") or d.get("total_bytes_estimate")
+                db = d.get("downloaded_bytes") or 0
+                job.downloaded, job.total = db, tb
+                job.percent = round(db * 100 / tb, 1) if tb else job.percent
+                job.speed, job.eta = d.get("speed"), d.get("eta")
+                inf = d.get("info_dict") or {}
+                vc = inf.get("vcodec") or "none"
+                part = "video stream" if vc != "none" and (inf.get("acodec") or "none") == "none" else \
+                    ("audio stream" if vc == "none" else "file")
+                job.stage = f"Downloading {part}"
+            elif d["status"] == "finished":
+                job.stage = "Processing..."
+
+        def pp_hook(d):
+            if d["status"] == "started":
+                name = d.get("postprocessor", "")
+                job.stage = {"Merger": "Merging video + audio...", "ExtractAudio": "Converting audio...",
+                             "EmbedThumbnail": "Embedding cover art...", "FFmpegMetadata": "Writing metadata...",
+                             "VideoConvertor": "Converting video (may take a while)...",
+                             "VideoRemuxer": "Remuxing..."}.get(name, f"{name}...")
+            fp = (d.get("info_dict") or {}).get("filepath")
+            if fp:
+                job.filepath = fp
+
+        opts.update({"progress_hooks": [hook], "postprocessor_hooks": [pp_hook],
+                     "logger": JobLogger(job), "quiet": True, "noprogress": True})
+        sleep = float(s.get("sleep_interval") or 0)
+        if sleep > 0:
+            opts["sleep_interval"] = sleep
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            # identify the video (real id + channel), then decide skip / folder
+            job.stage = "Starting..."
+            info = ydl.extract_info(job.url, download=False, process=False)
+            hops = 0
+            while info and info.get("_type") == "url" and hops < 3:
+                info = ydl.extract_info(info["url"], download=False, process=False, ie_key=info.get("ie_key"))
+                hops += 1
+            if job.stop_reason:
+                raise DownloadCancelled()
+            vid = info.get("id") or job.vid
+            job.vid = vid
+            job.site = info.get("extractor_key") or job.site
+            job.channel_id = info.get("channel_id") or job.channel_id
+            ch_name = info.get("channel") or info.get("uploader") or job.channel or ""
+            job.channel = ch_name
+            job.title = info.get("title") or job.title
+            if not job.thumb:
+                job.thumb = info.get("thumbnail") or ""
+            ls = info.get("live_status")
+            if ls == "is_upcoming":
+                raise RuntimeError("This live event will begin later (is_upcoming)")
+            if ls == "is_live" and not job.section:
+                raise RuntimeError("This video is live now (currently live)")
+            if skip_known:
+                have = library.is_downloaded(vid, mode, redl)
+                if have:
+                    job.filepath = have if isinstance(have, str) else job.filepath
+                    job.status, job.stage, job.percent = "skipped", "Already downloaded (skipped)", 100
+                    return info
+            folder = target_folder(s, job, ch_name)
+            os.makedirs(folder, exist_ok=True)
+            free = free_space_gb(folder)
+            if free is not None and free < float(s.get("min_free_gb") or 0):
+                raise DiskLow()
+            ydl.params["outtmpl"]["default"] = os.path.join(folder.replace("%", "%%"), file_name_template(s, job.section))
+            info = ydl.process_ie_result(info, download=True)
+            if info:
+                rd = info.get("requested_downloads") or []
+                if rd and rd[-1].get("filepath"):
+                    job.filepath = rd[-1]["filepath"]
+        return info
+
+class DiskLow(Exception):
+    pass
+
+
+def _hm(v, default):
+    try:
+        h, m = str(v or default).split(":")[:2]
+        return int(h) * 60 + int(m)
+    except Exception:
+        h, m = default.split(":")
+        return int(h) * 60 + int(m)
+
+
+def in_window(s):
+    """True if now is inside the "only download between" hours (handles windows that cross midnight)."""
+    t = time.localtime()
+    now = t.tm_hour * 60 + t.tm_min
+    a, b = _hm(s.get("schedule_start"), "00:00"), _hm(s.get("schedule_end"), "06:00")
+    if a == b:
+        return True
+    return a <= now < b if a < b else (now >= a or now < b)
+
+
+notifier = None                # set by the server (tray icon) - notifier(title, message)
+power_state = {"pending": None, "at": None}
+
+
+def on_batch_finished(stats):
+    s = settings.get()
+    done, failed = stats.get("done", 0), stats.get("error", 0)
+    if s.get("notify_done") and notifier and (done or failed):
+        try:
+            msg = f"{done} downloaded" + (f", {failed} failed" if failed else "") + "."
+            notifier("Rit Downloader: downloads finished", msg)
+        except Exception as ex:
+            print("notify:", ex, file=sys.stderr)
+    action = s.get("after_done") or "nothing"
+    if action in ("sleep", "shutdown") and (done or failed):
+        settings.update({"after_done": "nothing"})       # one-time: never surprise the user twice
+        power_action(action)
+
+
+def power_action(action):
+    power_state.update({"pending": action, "at": time.time() + 120})
+    if notifier:
+        try:
+            notifier("Rit Downloader", ("The computer will shut down" if action == "shutdown" else
+                                        "The computer will sleep") + " in 2 minutes. Open the app to cancel.")
+        except Exception:
+            pass
+
+    def run():
+        while power_state.get("pending") == action and time.time() < power_state["at"]:
+            time.sleep(1)
+        if power_state.get("pending") != action:
+            return
+        power_state.update({"pending": None, "at": None})
+        try:
+            if IS_WIN:
+                if action == "shutdown":
+                    subprocess.run(["shutdown", "/s", "/t", "0"], creationflags=NOWINDOW)
+                else:
+                    subprocess.run(["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"], creationflags=NOWINDOW)
+            elif IS_MAC:
+                if action == "shutdown":
+                    subprocess.run(["osascript", "-e", 'tell app "System Events" to shut down'])
+                else:
+                    subprocess.run(["pmset", "sleepnow"])
+        except Exception as ex:
+            print("power action:", ex, file=sys.stderr)
+    threading.Thread(target=run, daemon=True).start()
+
+
+def cancel_power_action():
+    power_state.update({"pending": None, "at": None})
 
 
 def target_folder(s, job, channel_name):
@@ -1004,8 +1300,10 @@ def sync_channel(key, download=True, opts=None):
         o = dict(opts or ch.get("opts") or {})
         mode = o.get("mode") or cur.get("mode")
         b = list_channel_videos(ch["url"])
+        min_s = float(cur.get("min_minutes_sync") or 0) * 60
         vids = [e for e in b.entries if e.get("kind") == "video" and e.get("vid")
-                and e.get("live") not in ("is_live", "is_upcoming")]
+                and e.get("live") not in ("is_live", "is_upcoming")
+                and not (min_s and e.get("duration") and e["duration"] < min_s)]
         st = library.status_map([e["vid"] for e in vids], cur.get("redownload_deleted"))
         new = [e for e in vids if not st.get(e["vid"], {}).get(mode)]
         res = {"state": "done", "new": len(new), "total": len(vids), "queued": 0, "finished": time.time()}
@@ -1269,4 +1567,38 @@ def system_info():
     return {"ytdlp": yt_dlp.version.__version__, "ffmpeg": have_ffmpeg(),
             "free_gb": free_space_gb(s["download_dir"]), "drives": fixed_drives(),
             "js": bool(js_runtime_args()), "stats": manager.stats(),
+            "cookies": _public_cookie_status(s), "hold": manager.hold_reason, "last_batch": manager.last_batch,
+            "power": power_state.get("pending"), "power_at": power_state.get("at"),
+            "window": [s.get("schedule_start"), s.get("schedule_end")] if s.get("schedule_enabled") else None,
             "platform": "mac" if IS_MAC else ("win" if IS_WIN else "linux")}
+
+
+def _public_cookie_status(s):
+    st = cookie_check(s)
+    return None if st is None else {k: st.get(k) for k in ("ok", "kind", "name", "count", "youtube", "error")}
+
+
+def pick_file(initial):
+    """Native 'open file' dialog for a cookies.txt file."""
+    initial = initial if initial and os.path.isdir(initial) else os.path.expanduser("~")
+    if IS_MAC:
+        out = subprocess.run(["osascript", "-e", 'POSIX path of (choose file with prompt "Choose your cookies.txt file")'],
+                             capture_output=True, text=True)
+        return out.stdout.strip() or None
+    import tempfile
+    fd, tmp = tempfile.mkstemp(suffix=".txt")
+    os.close(fd)
+    cmd = [sys.executable] if paths.FROZEN else [sys.executable.replace("pythonw.exe", "python.exe"),
+                                                 os.path.join(os.path.dirname(os.path.abspath(__file__)), "server.py")]
+    try:
+        subprocess.run(cmd + ["--pick-file", initial, tmp], creationflags=NOWINDOW, timeout=600)
+        with open(tmp, encoding="utf-8") as f:
+            p = f.read().strip()
+    except Exception:
+        p = ""
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    return os.path.normpath(p) if p else None

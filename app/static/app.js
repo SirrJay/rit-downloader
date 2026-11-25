@@ -67,6 +67,9 @@ function applySettings() {
   $("#videoOpts").classList.toggle("hidden", s.mode !== "video");
   $("#audioOpts").classList.toggle("hidden", s.mode !== "audio");
   $("#dlDir").textContent = s.download_dir;
+  $("#cookieSource").value = s.cookies_file ? "file" : (s.cookies_browser || "");
+  $("#cookieFileRow").classList.toggle("hidden", $("#cookieSource").value !== "file");
+  $("#cookieFilePath").textContent = s.cookies_file || t("No file chosen");
   renderDrives();
   updateSelInfo();
   if (S.lastMode !== s.mode) { S.lastMode = s.mode; updateMarks(); }
@@ -108,6 +111,7 @@ async function refreshSystem() {
     $("#appv").textContent = S.sys.version || "";
     $("#ffv").textContent = S.sys.ffmpeg ? t("Installed") : t("Missing (needed for MP3, merging HD and conversion)");
     $("#ffBtn").classList.toggle("hidden", !!S.sys.ffmpeg);
+    renderBanners();
     renderDrives();
     updateSelInfo();
   } catch { /* server restarting */ }
@@ -457,7 +461,9 @@ $("#results").addEventListener("click", (ev) => {
 
 /* ---------------------------------------------------------------- channel bar ("download new only") */
 function channelNew() {
-  return S.entries.filter((e) => e.kind === "video" && !hasIt(e) && e.live !== "is_upcoming" && e.live !== "is_live");
+  const minS = (+S.settings.min_minutes_sync || 0) * 60;
+  return S.entries.filter((e) => e.kind === "video" && !hasIt(e) && e.live !== "is_upcoming" && e.live !== "is_live"
+    && !(minS && e.duration && e.duration < minS));
 }
 function renderChanBar() {
   const ch = S.channel, bar = $("#chanBar");
@@ -526,10 +532,10 @@ function barOptions(over = {}) {
   return Object.assign({ mode: s.mode, video_quality: s.video_quality, video_container: s.video_container,
     audio_format: s.audio_format, audio_quality: s.audio_quality }, over);
 }
-async function enqueue(entries, over = {}, formatId, force = false) {
+async function enqueue(entries, over = {}, formatId, force = false, section = null) {
   const items = entries.filter((e) => e.kind === "video").map((e) => ({
     url: e.url, title: e.title, thumb: e.thumb, channel: e.channel, duration: e.duration, format_id: formatId || null,
-    vid: e.vid, site: e.site, channel_id: e.channel_id,
+    vid: e.vid, site: e.site, channel_id: e.channel_id, section,
   }));
   if (!items.length) return;
   try {
@@ -596,6 +602,11 @@ async function openQualities(e) {
     <div class="fhead">${f.thumb ? `<img src="${esc(f.thumb)}" alt="">` : ""}
       <div><h3>${esc(f.title)}</h3><div class="meta">${esc(f.channel || "")} &middot; ${fmtDur(f.duration)} ${f.date ? "&middot; " + fmtDate(f.date) : ""}</div>
       <p class="muted small">${esc(t("The best audio is added to any video quality you pick. Sizes are estimates. The output file type comes from the bar at the bottom (now {fmt}).", { fmt: cont.toUpperCase() }))}</p></div></div>
+    <div class="clipbox">
+      <label class="field">${esc(t("Only from"))}<input id="clipFrom" placeholder="0:00:00" spellcheck="false"></label>
+      <label class="field">${esc(t("to"))}<input id="clipTo" placeholder="${esc(fmtDur(f.duration) || "1:00:00")}" spellcheck="false"></label>
+      <span class="muted small">${esc(t("Optional: download just part of the video, for example only the sermon. Leave empty for the whole video."))}</span>
+    </div>
     <div class="ftitle">${ICON.video}<h4>${esc(t("Video qualities"))}</h4></div>
     ${vrows ? `<table class="ftable"><tr><th>${esc(t("Quality"))}</th><th>${esc(t("Codec"))}</th><th>${esc(t("Source"))}</th><th>${esc(t("Size"))}</th><th></th></tr>${vrows}</table>` : `<p class="muted">${esc(t("No separate video qualities."))}</p>`}
     <div class="ftitle">${ICON.audio}<h4>${esc(t("Audio only"))}</h4></div>
@@ -604,8 +615,23 @@ async function openQualities(e) {
     const b = ev.target.closest("[data-fid]"); if (!b) return;
     const over = { mode: b.dataset.mode };
     if (b.dataset.af) over.audio_format = b.dataset.af;
-    enqueue([e], over, b.dataset.fid);
+    const sec = clipSection(f.duration);
+    if (sec === false) return;
+    enqueue([e], over, b.dataset.fid, false, sec);
   };
+}
+function parseTime(v) {
+  v = String(v || "").trim(); if (!v) return null;
+  const p = v.split(":").map(Number); if (p.some(isNaN)) return NaN;
+  return p.reduce((a, x) => a * 60 + x, 0);
+}
+const hms = (s) => [Math.floor(s / 3600), Math.floor(s % 3600 / 60), Math.floor(s % 60)].map((x) => String(x).padStart(2, "0")).join(":");
+function clipSection(dur) {
+  const a = parseTime($("#clipFrom").value), b = parseTime($("#clipTo").value);
+  if (a === null && b === null) return null;
+  const from = a || 0, to = b === null ? (dur || 0) : b;
+  if (isNaN(from) || isNaN(to) || to <= from) { toast(t("Check the start and end times (for example 0:05:00 to 1:20:00)."), "bad"); return false; }
+  return `${hms(from)}-${hms(to)}`;
 }
 $("#fmtModal").addEventListener("click", (ev) => {
   if (ev.target.id === "fmtModal" || ev.target.closest("[data-close]")) $("#fmtModal").classList.add("hidden");
@@ -618,9 +644,9 @@ function jobFmt(j) {
   const o = j.opts || {};
   if (o.mode === "audio") {
     const f = (o.audio_format || "mp3").toUpperCase();
-    return `${f === "ORIGINAL" ? t("Original audio") : f} · ${o.audio_quality === "0" || o.audio_quality === 0 ? t("best") : o.audio_quality + " kbps"}`;
+    return `${f === "ORIGINAL" ? t("Original audio") : f} · ${o.audio_quality === "0" || o.audio_quality === 0 ? t("best") : o.audio_quality + " kbps"}${j && j.section ? " · " + t("part") + " " + j.section : ""}`;
   }
-  return `${(o.video_container || "mp4").toUpperCase()} · ${j.format_id ? t("chosen quality") : o.video_quality === "best" ? t("best") : o.video_quality + "p"}`;
+  return `${(o.video_container || "mp4").toUpperCase()} · ${j.format_id ? t("chosen quality") : o.video_quality === "best" ? t("best") : o.video_quality + "p"}${j.section ? " · " + t("part") + " " + j.section : ""}`;
 }
 function jobRow(j) {
   const el = document.createElement("div");
@@ -641,12 +667,46 @@ function jobActs(j) {
     default: return (j.filepath ? b("play", "Open", "btn sm") + b("show", "Show in folder") : "") + b("remove", "Remove");
   }
 }
+function jobVisible(j) {
+  const q = ($("#jobFilter").value || "").trim().toLowerCase();
+  const f = $("#jobStatusFilter").value;
+  if (q && !((j.title || "") + " " + (j.channel || "") + " " + (j.group || "")).toLowerCase().includes(q)) return false;
+  if (f === "active") return ["running", "queued"].includes(j.status);
+  if (f === "done") return ["done", "skipped"].includes(j.status);
+  if (f) return j.status === f;
+  return true;
+}
+["#jobFilter", "#jobStatusFilter"].forEach((s) => $(s).addEventListener("input", () => pollJobs()));
+
+function renderBanners() {
+  const sys = S.sys || {}, box = $("#dlBanners"); if (!box) return;
+  const out = [];
+  const ck = sys.cookies;
+  if (ck && !ck.ok) out.push(["warn", t("Your sign-in from {name} could not be read, so downloads continue without it. Public videos are not affected.", { name: ck.name }), "fixcookies", t("Fix sign-in")]);
+  if (sys.hold === "disk") out.push(["warn", t("Downloads are paused because the disk is almost full. Free up space, then click Resume all."), "", ""]);
+  if (sys.hold === "schedule" && sys.window) out.push(["info", t("Downloads wait for your download hours ({from} to {to}).", { from: sys.window[0], to: sys.window[1] }), "", ""]);
+  if (sys.power) {
+    const left = Math.max(0, Math.round((sys.power_at - Date.now() / 1000)));
+    out.push(["warn", t(sys.power === "shutdown" ? "The computer will shut down in {n} seconds." : "The computer will sleep in {n} seconds.", { n: left }), "cancelpower", t("Cancel")]);
+  }
+  box.innerHTML = out.map(([k, msg, act, label]) => `<div class="banner2 ${k}"><span>${esc(msg)}</span>${act ? `<button class="btn sm" data-banner="${act}">${esc(label)}</button>` : ""}</div>`).join("");
+}
+$("#dlBanners").addEventListener("click", async (ev) => {
+  const b = ev.target.closest("[data-banner]"); if (!b) return;
+  if (b.dataset.banner === "fixcookies") { showView("settings"); $("#cookieSource").scrollIntoView({ block: "center" }); $("#cookieSource").focus(); }
+  if (b.dataset.banner === "cancelpower") { await api("power/cancel", {}); toast(t("Canceled"), "ok"); refreshSystem(); }
+});
+
 let jobsT;
 async function pollJobs() {
   clearTimeout(jobsT);
   let data;
   try { data = await api("jobs"); } catch { jobsT = setTimeout(pollJobs, 3000); return; }
   const { jobs, stats } = data;
+  if (S.sys && (S.sys.hold !== data.hold || S.sys.power !== data.power)) {
+    S.sys.hold = data.hold; S.sys.power = data.power; S.sys.power_at = data.power_at;
+    if (data.hold === "schedule" && !S.sys.window) refreshSystem(); else renderBanners();
+  }
   const finished = (stats.done || 0) + (stats.skipped || 0);
   if (S.lastFinished !== undefined && finished > S.lastFinished) refreshMarks();
   S.lastFinished = finished;
@@ -680,7 +740,9 @@ async function pollJobs() {
     el.querySelector(".jinfo").textContent = info;
     el.querySelector(".jgroup").textContent = j.group ? "📁 " + j.group : "";
     el.querySelector(".bar > i").style.width = (["done", "skipped"].includes(j.status) ? 100 : j.percent || 0) + "%";
-    const err = el.querySelector(".jerr"); err.textContent = j.error || ""; err.classList.toggle("hidden", !j.error);
+    const err = el.querySelector(".jerr"); err.textContent = j.error ? t(j.error) : ""; err.title = j.error_raw || "";
+    err.classList.toggle("hidden", !j.error);
+    el.classList.toggle("hidden", !jobVisible(j));
     const acts = jobActs(j);
     const ab = el.querySelector(".jacts"); if (ab.dataset.k !== j.status + !!j.filepath) { ab.innerHTML = acts; ab.dataset.k = j.status + !!j.filepath; }
     el._job = j;
@@ -707,6 +769,42 @@ $$("[data-all]").forEach((b) => b.addEventListener("click", async () => {
   pollJobs();
 }));
 $("#openFolder").addEventListener("click", () => api("open", {}));
+
+/* ---------------------------------------------------------------- sign-in (cookies) */
+const COOKIE_ERR = {
+  locked: "The browser is open and has locked its sign-in data. Close it completely, or use Firefox or a cookies.txt file.",
+  decrypt: "This browser encrypts its sign-in data so other apps cannot read it. Use Firefox or a cookies.txt file instead.",
+  unreadable: "The sign-in data could not be read. Close the browser completely, or use Firefox or a cookies.txt file.",
+  file_missing: "The cookies file was not found. Choose it again.",
+};
+function showCookieResult(st) {
+  const el = $("#cookieResult");
+  if (!st) { el.textContent = t("Sign-in is off."); el.className = "small"; return; }
+  if (st.ok) {
+    el.textContent = st.youtube ? t("Working: {n} YouTube/Google sign-in cookies found.", { n: st.youtube }) :
+      t("Readable, but no YouTube sign-in found. Sign in to youtube.com in that browser first.");
+    el.className = "small " + (st.youtube ? "cookie-ok" : "cookie-bad");
+  } else { el.textContent = t(COOKIE_ERR[st.error] || COOKIE_ERR.unreadable); el.className = "small cookie-bad"; }
+}
+$("#cookieSource").addEventListener("change", async (ev) => {
+  const v = ev.target.value;
+  $("#cookieFileRow").classList.toggle("hidden", v !== "file");
+  if (v === "file") {
+    if (!S.settings.cookies_file) { $("#cookieFileBtn").click(); return; }
+    await saveSetting({ cookies_browser: "" });
+  } else await saveSetting({ cookies_browser: v, cookies_file: "" });
+  setTimeout(() => $("#cookieTest").click(), 400);
+});
+$("#cookieFileBtn").addEventListener("click", async () => {
+  toast(t("A file picker opened. It may be behind this window."));
+  const r = await api("cookies/file", {});
+  if (r.path) { S.settings = r.settings; applySettings(); showCookieResult(r.status); refreshSystem(); }
+  else applySettings();
+});
+$("#cookieTest").addEventListener("click", async () => {
+  $("#cookieResult").textContent = t("Checking..."); $("#cookieResult").className = "small";
+  const r = await api("cookies/test", {}); showCookieResult(r.status); refreshSystem();
+});
 
 /* ---------------------------------------------------------------- settings buttons */
 $("#pickDir").addEventListener("click", async () => {
@@ -747,7 +845,7 @@ async function boot() {
   applySettings();
   if (S.settings.language !== I18N.lang) saveSetting({ language: I18N.lang }, true);
   setKind("search");
-  refreshSystem(); setInterval(refreshSystem, 20000);
+  refreshSystem(); setInterval(() => { if (S.sys && S.sys.power) refreshSystem(); }, 2000); setInterval(refreshSystem, 20000);
   api("app-update").then((u) => {
     if (!u.available) return;
     const bar = $("#updateBanner");

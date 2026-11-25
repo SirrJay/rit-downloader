@@ -137,6 +137,7 @@
 
 <!-- ============================== DOWNLOADS -->
 <section id="view-downloads" class="view">
+  <div id="dlBanners"></div>
   <div class="dlhead">
     <div class="chips" id="dlStats"></div>
     <div class="tools">
@@ -147,6 +148,21 @@
       <button class="btn ghost sm" data-all="cancel">Cancel all</button>
       <button class="btn primary sm" id="openFolder">Open download folder</button>
     </div>
+  </div>
+  <div class="dltools">
+    <div class="qwrap sm">
+      <svg class="ico" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="jobFilter" placeholder="Search downloads">
+    </div>
+    <select id="jobStatusFilter" title="Show">
+      <option value="">All</option><option value="active">In progress and waiting</option>
+      <option value="done">Done</option><option value="error">Failed</option><option value="paused">Paused</option>
+    </select>
+    <label class="field inline-field">When all downloads finish
+      <select data-set="after_done">
+        <option value="nothing">Do nothing</option><option value="sleep">Put the computer to sleep</option><option value="shutdown">Shut down the computer</option>
+      </select>
+    </label>
   </div>
   <div id="jobs" class="jobs"></div>
   <div id="jobsEmpty" class="hero small">
@@ -179,6 +195,12 @@
     <label class="field">Check channels kept up to date every
       <select data-set="sync_hours" data-num>
         <option value="6">6 hours</option><option value="12">12 hours</option><option value="24">24 hours</option>
+      </select>
+    </label>
+    <label class="field">When getting new videos from a channel, skip videos shorter than
+      <select data-set="min_minutes_sync" data-num>
+        <option value="0">Don't skip any</option><option value="2">2 minutes</option><option value="5">5 minutes</option>
+        <option value="10">10 minutes</option><option value="20">20 minutes</option><option value="40">40 minutes</option>
       </select>
     </label>
     <div class="muted small" id="libScanState" data-no-i18n></div>
@@ -231,6 +253,7 @@
       <h3>Audio and tags</h3>
       <label class="toggle"><input type="checkbox" data-set="embed_thumbnail"><span></span> Add the thumbnail as cover art (MP3, M4A, FLAC, Opus, MP4, MKV)</label>
       <label class="toggle"><input type="checkbox" data-set="embed_metadata"><span></span> Write the title, artist, date and description into the file</label>
+      <label class="toggle"><input type="checkbox" data-set="normalize_audio"><span></span> Even out the volume of audio downloads (quiet and loud parts, great for sermons)</label>
       <p class="note">For sermons and other speech, MP3 at 96 to 128 kbps sounds clear and uses about 1 MB per minute. Use 320 kbps or FLAC for music.</p>
     </div>
 
@@ -251,6 +274,18 @@
           <option value="">No limit</option><option value="500K">500 KB/s</option><option value="1M">1 MB/s</option><option value="2M">2 MB/s</option><option value="5M">5 MB/s</option>
         </select>
       </label>
+      <label class="toggle"><input type="checkbox" data-set="auto_retry"><span></span> Retry automatically after network problems or YouTube limits (up to 3 times)</label>
+      <label class="toggle"><input type="checkbox" data-set="schedule_enabled"><span></span> Only download between these hours (for example cheaper night-time data)</label>
+      <div class="inline">
+        <label class="field sm">From <input type="time" data-set="schedule_start"></label>
+        <label class="field sm">To <input type="time" data-set="schedule_end"></label>
+      </div>
+      <label class="field">Keep this much free space on the disk (downloads pause before the disk fills up)
+        <select data-set="min_free_gb" data-num>
+          <option value="0">No limit</option><option value="1">1 GB</option><option value="2">2 GB</option><option value="5">5 GB</option><option value="10">10 GB</option><option value="20">20 GB</option>
+        </select>
+      </label>
+      <label class="field">Proxy (optional, for example http://127.0.0.1:8080)<input data-set="proxy" placeholder="http://host:port" spellcheck="false"></label>
       <label class="field">Pause between downloads (helps avoid YouTube blocking large batches)
         <select data-set="sleep_interval" data-num>
           <option value="0">None</option><option value="1">1 second</option><option value="3">3 seconds</option><option value="5">5 seconds</option><option value="10">10 seconds</option>
@@ -259,13 +294,26 @@
     </div>
 
     <div class="card set">
-      <h3>Sign-in</h3>
-      <label class="field">Use cookies from a browser
-        <select data-set="cookies_browser">
-          <option value="">Off</option><option value="edge">Microsoft Edge</option><option value="chrome">Google Chrome</option><option value="firefox">Firefox</option><option value="brave">Brave</option><option value="opera">Opera</option>
+      <h3>Sign-in (only for restricted videos)</h3>
+      <label class="field">Sign in using
+        <select id="cookieSource">
+          <option value="">Off (recommended for public videos)</option>
+          <option value="file">A cookies.txt file (most reliable)</option>
+          <option value="firefox">Firefox</option>
+          <option value="chrome">Google Chrome</option>
+          <option value="edge">Microsoft Edge</option>
+          <option value="brave">Brave</option>
+          <option value="opera">Opera</option>
+          <option value="vivaldi">Vivaldi</option>
+          <option value="safari">Safari (Mac)</option>
         </select>
       </label>
-      <p class="note">Turn this on only for age-restricted, members-only or private videos, or if YouTube asks you to "confirm you're not a bot". Sign in to the site in that browser first. On Windows, Chrome and Edge must be fully closed while you use this. On a Mac, you may be asked to allow access to the browser's keychain.</p>
+      <div class="pathrow hidden" id="cookieFileRow">
+        <code id="cookieFilePath" data-no-i18n></code>
+        <button class="btn sm" id="cookieFileBtn">Choose file</button>
+      </div>
+      <div class="inline"><button class="btn sm" id="cookieTest">Test sign-in</button><span class="small" id="cookieResult" data-no-i18n></span></div>
+      <p class="note" data-i18n-html>Public videos need no sign-in. Use it only for age-restricted, members-only or private videos, or when YouTube asks you to confirm you're not a robot. <b>On Windows, Chrome and Edge lock and encrypt their sign-in data</b>, so they often cannot be used. Firefox works, and a cookies.txt file always works: install the free browser extension "Get cookies.txt LOCALLY", open youtube.com while signed in, export, then choose the file here. If a sign-in cannot be read, downloads continue without it.</p>
     </div>
 
     <div class="card set" id="accountCard">
@@ -297,6 +345,7 @@
       <label class="field">Language
         <select class="langsel" id="langSet" data-no-i18n></select>
       </label>
+      <label class="toggle"><input type="checkbox" data-set="notify_done"><span></span> Show a notification when downloads finish</label>
       <label class="field">Theme
         <select data-set="theme"><option value="dark">Dark</option><option value="light">Light</option></select>
       </label>

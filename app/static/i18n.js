@@ -29,7 +29,7 @@ function detectLang(serverLang) {
 }
 
 // Elements whose content is rendered by app.js with t() - the DOM walker leaves them alone.
-const I18N_SKIP = "script,style,code,#results,#jobs,#fmtBody,#dlStats,#selInfo,#sysinfo,#drives,#rTitle,#rStatus,#toasts,#dlDir,#appv,#ytv,#ffv,#updateBanner,[data-no-i18n]";
+const I18N_SKIP = "script,style,code,#results,#jobs,#dlBanners,#fmtBody,#dlStats,#selInfo,#sysinfo,#drives,#rTitle,#rStatus,#toasts,#dlDir,#appv,#ytv,#ffv,#updateBanner,[data-no-i18n]";
 
 function translateDOM(root = document.body) {
   // 1. blocks with inline markup are translated as a whole

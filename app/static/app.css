@@ -261,7 +261,7 @@ body.no-actions .actionbar { display: none; }
 .banner a { color: var(--accent-2); font-weight: 600; }
 
 /* ---------- language + lock */
-.langsel { padding: 5px 8px; font-size: 12.5px; max-width: 150px; }
+.langsel { padding: 5px 8px; font-size: 12.5px; max-width: 150px; min-width: 96px; }
 #lockBtn { margin-left: 2px; }
 
 /* ---------- sign-in screen */
@@ -343,3 +343,22 @@ details.acct summary { cursor: pointer; font-weight: 600; font-size: 13.5px; }
 .dupes li { display: flex; gap: 10px; align-items: center; padding: 5px 0; border-top: 1px solid var(--border); }
 .dupes li span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .empty-lib { text-align: center; color: var(--muted); padding: 50px 20px; }
+
+/* ---------- v1.2: banners, downloads tools, clip */
+.banner2 { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 10px; margin-bottom: 12px;
+  background: var(--surface); border: 1px solid var(--border); font-size: 13px; }
+.banner2.warn { border-color: color-mix(in srgb, var(--warn) 55%, var(--border)); }
+.banner2.warn::before { content: "!"; flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--warn); color: #000; font-weight: 800; display: grid; place-items: center; }
+.banner2.info::before { content: "i"; flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 800; display: grid; place-items: center; font-style: italic; }
+.banner2 span { flex: 1; }
+.dltools { display: flex; gap: 10px; align-items: flex-end; margin-bottom: 12px; flex-wrap: wrap; }
+.dltools select { padding: 6px 8px; font-size: 13px; }
+.inline-field { flex-direction: row !important; align-items: center; gap: 8px !important; margin-left: auto; }
+[dir="rtl"] .inline-field { margin-left: 0; margin-right: auto; }
+.job .jerr { cursor: help; }
+.clipbox { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px 12px; margin: 0 0 16px; }
+.clipbox .field { flex: 0 0 120px; }
+.clipbox input { width: 100%; }
+.cookie-ok { color: var(--ok); } .cookie-bad { color: var(--bad); }
+input[type=time] { font: inherit; color: var(--text); background: var(--surface2); border: 1px solid var(--border); border-radius: 9px; padding: 7px 9px; color-scheme: inherit; }

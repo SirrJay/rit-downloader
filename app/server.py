@@ -15,10 +15,10 @@ HOST, PORT = "127.0.0.1", int(os.environ.get("RIT_PORT") or 8765)
 APP_URL = f"http://{HOST}:{PORT}/"
 
 # ---- helper mode: native folder dialog in its own process ------------------------------
-if __name__ == "__main__" and len(sys.argv) >= 4 and sys.argv[1] == "--pick-folder":
+if __name__ == "__main__" and len(sys.argv) >= 4 and sys.argv[1] in ("--pick-folder", "--pick-file"):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import engine_dialog  # noqa: E402  (tiny module, avoids importing yt-dlp)
-    engine_dialog.run(sys.argv[2], sys.argv[3])
+    (engine_dialog.run if sys.argv[1] == "--pick-folder" else engine_dialog.run_file)(sys.argv[2], sys.argv[3])
     sys.exit(0)
 
 import paths  # noqa: E402
@@ -354,7 +354,8 @@ def library_scan():
 
 @app.get("/api/jobs")
 def jobs():
-    return jsonify(jobs=E.manager.list(), stats=E.manager.stats())
+    return jsonify(jobs=E.manager.list(), stats=E.manager.stats(), hold=E.manager.hold_reason,
+                   power=E.power_state.get("pending"), power_at=E.power_state.get("at"))
 
 
 @app.post("/api/jobs/action")
@@ -377,6 +378,30 @@ def open_path():
     d = request.get_json() or {}
     path = d.get("path") or E.settings.get()["download_dir"]
     return jsonify(ok=E.open_path(path, bool(d.get("select"))))
+
+
+# ---- sign-in (cookies) ------------------------------------------------------------------
+@app.post("/api/cookies/test")
+def cookies_test():
+    st = E.cookie_check(E.settings.get(), force=True)
+    return jsonify(status=None if st is None else {k: st.get(k) for k in ("ok", "kind", "name", "count", "youtube", "error")})
+
+
+@app.post("/api/cookies/file")
+def cookies_file():
+    cur = E.settings.get().get("cookies_file") or ""
+    p = E.pick_file(os.path.dirname(cur) if cur else os.path.join(os.path.expanduser("~"), "Downloads"))
+    if p:
+        E.settings.update({"cookies_file": p, "cookies_browser": ""})
+    st = E.cookie_check(E.settings.get(), force=True) if p else None
+    return jsonify(path=p, settings=E.settings.get(),
+                   status=None if st is None else {k: st.get(k) for k in ("ok", "kind", "name", "count", "youtube", "error")})
+
+
+@app.post("/api/power/cancel")
+def power_cancel():
+    E.cancel_power_action()
+    return jsonify(ok=True)
 
 
 @app.post("/api/update-ytdlp")
@@ -430,7 +455,9 @@ def run_tray():
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit (stops downloads)", lambda icon: (icon.stop(), os._exit(0))),
         )
-        pystray.Icon("RitDownloader", img, f"Rit Downloader {VERSION}", menu).run()
+        icon = pystray.Icon("RitDownloader", img, f"Rit Downloader {VERSION}", menu)
+        E.notifier = lambda title, msg: icon.notify(msg, title)
+        icon.run()
         return True
     except Exception as ex:
         print("tray failed:", ex, file=sys.stderr)
