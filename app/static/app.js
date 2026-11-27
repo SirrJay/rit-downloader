@@ -308,7 +308,25 @@ const ICON = {
   check: '<svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>',
 };
 
+const MEDIA_EXT = new Set(["mp3", "m4a", "opus", "ogg", "oga", "flac", "wav", "aac", "mp4", "mkv", "webm", "mov", "m4v"]);
+const fileExt = (p) => (String(p || "").split(/[\\/]/).pop().split(".").pop() || "").toLowerCase();
+function fileCard(e, idx) {
+  const sel = S.sel.has(e.id) ? " sel" : "";
+  const ext = (e.ext || fileExt(e.title)).split(".").pop().slice(0, 6) || "file";
+  return `<div class="item file${sel}" data-id="${esc(e.id)}" data-idx="${idx}">
+    <div class="thumb" data-act="toggle"><span class="filebadge">${esc(ext)}</span><span class="tick">${ICON.check}</span>
+      ${e.executable ? `<span class="exe" title="${esc(t("Programs can harm your computer. Only run software from websites you trust."))}">${esc(t("Program"))}</span>` : ""}
+      ${e.size ? `<span class="dur">${esc(fmtBytes(e.size))}</span>` : ""}</div>
+    <div class="body"><div class="title" title="${esc(e.url)}">${esc(e.title)}</div>
+      ${e.text && e.text !== e.title ? `<div class="ftext">${esc(e.text)}</div>` : ""}
+      <div class="meta"><span>${esc(e.host || "")}</span></div>
+      <div class="acts">
+        <button class="btn primary" data-act="dl-file"><svg class="ico" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>${esc(t("Download file"))}</button>
+        <button class="btn ghost" data-act="copy" title="${esc(t("Copy link"))}">${esc(t("Copy link"))}</button>
+      </div></div></div>`;
+}
 function card(e, idx) {
+  if (e.kind === "file") return fileCard(e, idx);
   const sel = S.sel.has(e.id) ? " sel" : "";
   const img = e.thumb ? `<img loading="lazy" src="${esc(e.thumb)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : "";
   if (e.kind === "channel") {
@@ -336,6 +354,7 @@ function card(e, idx) {
       <div class="meta">${chan}${e.views ? `<span>${esc(t("{n} views", { n: fmtNum(e.views) }))}</span>` : ""}${e.date ? `<span>${fmtDate(e.date)}</span>` : ""}</div>
       <div class="acts">
         ${dlButton(e, "video")}${dlButton(e, "audio")}
+        ${hasIt(e) ? `<button class="btn ghost trash" data-act="del" title="${esc(t("Delete the downloaded file (moves it to the Recycle Bin)"))}">✕</button>` : ""}
         <button class="btn ghost" data-act="quality" title="${esc(t("See every available quality"))}">${ICON.q}</button>
         <button class="btn ghost" data-act="open" title="${esc(t("Open on the website"))}">${ICON.ext}</button>
       </div></div></div>`;
@@ -363,6 +382,9 @@ function updateMarks() {
     if (old) old.remove();
     if (html) th.querySelector(".tick").insertAdjacentHTML("afterend", html);
     el.querySelectorAll("[data-act^=dl-]").forEach((b) => { b.outerHTML = dlButton(e, b.dataset.act.slice(3)); });
+    const tr = el.querySelector("[data-act=del]");
+    if (hasIt(e) && !tr) el.querySelector(".acts [data-act=quality]").insertAdjacentHTML("beforebegin", `<button class="btn ghost trash" data-act="del" title="${esc(t("Delete the downloaded file (moves it to the Recycle Bin)"))}">✕</button>`);
+    if (!hasIt(e) && tr) tr.remove();
   });
   renderChanBar();
   updateSelInfo();
@@ -408,12 +430,32 @@ $("#viewSeg").addEventListener("click", (e) => {
   render(true);
 });
 
-function selectable() { return S.shown.filter((e) => e.kind === "video"); }
+function selectable() { return S.shown.filter((e) => e.kind === "video" || e.kind === "file"); }
 function refreshSelClasses() {
   $$("#results .item").forEach((el) => el.classList.toggle("sel", S.sel.has(el.dataset.id)));
   $("#results").classList.toggle("selecting", S.sel.size > 0);
   updateSelInfo();
 }
+async function deleteVideos(list, mode = curMode()) {
+  // only the file of the current mode (Audio or Video) is deleted
+  const vids = list.filter((e) => e.dl && e.dl[mode]).map((e) => ({ vid: e.vid, mode }));
+  if (!vids.length) return;
+  const r = await api("files/delete", { vids });
+  toast(t("{n} files moved to the Recycle Bin.", { n: r.deleted }) + (r.failed.length ? " " + t("{n} could not be deleted.", { n: r.failed.length }) : ""), r.failed.length ? "bad" : "ok");
+  refreshMarks();
+}
+$("#delSel").addEventListener("click", () => {
+  const list = S.entries.filter((e) => S.sel.has(e.id) && hasIt(e));
+  if (!confirmInline(t("Move the downloaded files of {n} selected videos to the Recycle Bin?", { n: list.length }))) return;
+  deleteVideos(list); S.sel.clear(); refreshSelClasses();
+});
+$("#clearResults").addEventListener("click", () => {
+  if (S.browseId && S.loading) api(`browse/${S.browseId}/stop`, {}).catch(() => {});
+  S.browseId = null; setLoading(false);
+  S.req = null; S.entries = []; S.byId.clear(); S.sel.clear(); S.shown = []; S.history = []; S.channel = null;
+  $("#results").innerHTML = ""; $("#resultsHead").classList.add("hidden"); $("#hero").classList.remove("hidden");
+  renderChanBar(); updateSelInfo();
+});
 $("#selAll").addEventListener("click", () => { selectable().forEach((e) => S.sel.add(e.id)); refreshSelClasses(); });
 $("#selNew").addEventListener("click", () => {
   S.sel.clear();
@@ -434,7 +476,7 @@ $("#results").addEventListener("click", (ev) => {
     const idx = +item.dataset.idx;
     if (ev.shiftKey && S.lastIdx != null) {
       const [a, b] = [Math.min(S.lastIdx, idx), Math.max(S.lastIdx, idx)];
-      S.shown.slice(a, b + 1).forEach((x) => { if (x.kind === "video") S.sel.add(x.id); });
+      S.shown.slice(a, b + 1).forEach((x) => { if (x.kind === "video" || x.kind === "file") S.sel.add(x.id); });
     } else {
       S.sel.has(e.id) ? S.sel.delete(e.id) : S.sel.add(e.id);
     }
@@ -446,6 +488,13 @@ $("#results").addEventListener("click", (ev) => {
       if (!confirmInline(t("Already downloaded. Click again to download it again."))) return;
       enqueue([e], { mode }, null, true);
     } else enqueue([e], { mode });
+  } else if (act === "dl-file") {
+    enqueue([e]);
+  } else if (act === "copy") {
+    navigator.clipboard.writeText(e.url).then(() => toast(t("Link copied"), "ok"));
+  } else if (act === "del") {
+    if (!confirmInline(t("Delete the downloaded file of this video? It goes to the Recycle Bin."))) return;
+    deleteVideos([e]);
   } else if (act === "quality") {
     openQualities(e);
   } else if (act === "open") {
@@ -515,6 +564,8 @@ function updateSelInfo() {
   $("#dlSel").textContent = n ? t("Download selected ({n})", { n: n.toLocaleString() }) : t("Download selected");
   $("#dlShown").textContent = t("Download all shown ({n})", { n: shownVideos.length.toLocaleString() });
   $("#dlShown").disabled = !shownVideos.length;
+  $("#delSel").classList.toggle("hidden", !picked.some((e) => hasIt(e)));
+  document.body.classList.toggle("files-only", S.shown.length > 0 && S.shown.every((e) => e.kind === "file"));
   const base = n ? picked : shownVideos;
   if (!base.length) { $("#selInfo").textContent = t("Nothing selected"); return; }
   const secs = base.reduce((t, e) => t + (e.duration || 0), 0);
@@ -533,7 +584,8 @@ function barOptions(over = {}) {
     audio_format: s.audio_format, audio_quality: s.audio_quality }, over);
 }
 async function enqueue(entries, over = {}, formatId, force = false, section = null) {
-  const items = entries.filter((e) => e.kind === "video").map((e) => ({
+  const items = entries.filter((e) => e.kind === "video" || e.kind === "file").map((e) => (e.kind === "file" ?
+    { kind: "file", url: e.url, title: e.title, host: e.host, referrer: S.req && S.req.query } : {
     url: e.url, title: e.title, thumb: e.thumb, channel: e.channel, duration: e.duration, format_id: formatId || null,
     vid: e.vid, site: e.site, channel_id: e.channel_id, section,
   }));
@@ -542,7 +594,8 @@ async function enqueue(entries, over = {}, formatId, force = false, section = nu
     const r = await api("download", { items, options: barOptions(over), group: S.group || S.title, force: force || !!formatId });
     const audio = (over.mode || S.settings.mode) === "audio";
     const parts = [];
-    if (r.added) parts.push(t(audio ? "Added {n} audio downloads" : "Added {n} video downloads", { n: r.added }));
+    const onlyFiles = items.every((x) => x.kind === "file");
+    if (r.added) parts.push(onlyFiles ? `${t("Added to downloads")} (${r.added})` : t(audio ? "Added {n} audio downloads" : "Added {n} video downloads", { n: r.added }));
     if (r.already) parts.push(t("{n} already downloaded (skipped)", { n: r.already }));
     if (r.queued) parts.push(t("({n} already in the list)", { n: r.queued }));
     const msg = parts.join(" · ") || t("Already in the download list");
@@ -633,14 +686,27 @@ function clipSection(dur) {
   if (isNaN(from) || isNaN(to) || to <= from) { toast(t("Check the start and end times (for example 0:05:00 to 1:20:00)."), "bad"); return false; }
   return `${hms(from)}-${hms(to)}`;
 }
+function playFile(path, title) {
+  const ext = fileExt(path);
+  const audio = ["mp3", "m4a", "opus", "ogg", "oga", "flac", "wav", "aac"].includes(ext);
+  const src = "/api/media?path=" + encodeURIComponent(path);
+  $("#playerTitle").textContent = title || path.split(/[\\/]/).pop();
+  $("#playerBox").innerHTML = audio ? `<audio controls autoplay src="${src}"></audio>` : `<video controls autoplay src="${src}"></video>`;
+  $("#playerModal").classList.remove("hidden");
+}
+function closePlayer() { $("#playerBox").innerHTML = ""; $("#playerModal").classList.add("hidden"); }
+$("#playerModal").addEventListener("click", (ev) => { if (ev.target.id === "playerModal" || ev.target.closest("[data-close]")) closePlayer(); });
+$("#filesModal").addEventListener("click", (ev) => { if (ev.target.id === "filesModal" || ev.target.closest("[data-close]")) $("#filesModal").classList.add("hidden"); });
+
 $("#fmtModal").addEventListener("click", (ev) => {
   if (ev.target.id === "fmtModal" || ev.target.closest("[data-close]")) $("#fmtModal").classList.add("hidden");
 });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("#fmtModal").classList.add("hidden"); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { $("#fmtModal").classList.add("hidden"); $("#filesModal").classList.add("hidden"); closePlayer(); } });
 
 /* ---------------------------------------------------------------- downloads view */
 const STATUS_LABEL = { queued: "Waiting", running: "Downloading", done: "Done", skipped: "Skipped", error: "Failed", canceled: "Canceled", paused: "Paused" };
 function jobFmt(j) {
+  if (j.kind === "file") return `${t("File")}${j.total ? " · " + fmtBytes(j.total) : ""}`;
   const o = j.opts || {};
   if (o.mode === "audio") {
     const f = (o.audio_format || "mp3").toUpperCase();
@@ -664,7 +730,8 @@ function jobActs(j) {
     case "paused": return b("resume", "Resume", "btn sm") + b("top", "Download next") + b("remove", "Remove");
     case "error": return b("retry", "Retry", "btn sm") + b("remove", "Remove");
     case "canceled": return b("retry", "Retry", "btn sm") + b("remove", "Remove");
-    default: return (j.filepath ? b("play", "Open", "btn sm") + b("show", "Show in folder") : "") + b("remove", "Remove");
+    default: return (j.filepath ? (MEDIA_EXT.has(fileExt(j.filepath)) ? b("listen", "Play", "btn sm") : "") +
+      b("play", "Open", "btn sm ghost") + b("show", "Show in folder") + b("delfile", "Delete file", "btn sm ghost trash") : "") + b("remove", "Remove");
   }
 }
 const jobChan = (j) => j.channel || j.group || "";
@@ -679,6 +746,29 @@ function jobVisible(j) {
   return true;
 }
 ["#jobFilter", "#jobStatusFilter"].forEach((s) => $(s).addEventListener("input", () => pollJobs()));
+
+function offerClip(c) {
+  $$(".toast.action").forEach((x) => x.remove());
+  const el = document.createElement("div");
+  el.className = "toast action";
+  const isFile = c.kind === "file";
+  el.innerHTML = `<b>${esc(t("Link copied. Download it?"))}</b><div class="u">${esc(c.url)}</div><div class="row">
+    ${isFile ? `<button class="btn sm primary" data-c="file">${esc(t("Download file"))}</button>` :
+      `<button class="btn sm primary" data-c="audio">${esc(t("Audio"))}</button><button class="btn sm primary" data-c="video">${esc(t("Video"))}</button>`}
+    <button class="btn sm" data-c="open">${esc(t("Open in Browse"))}</button><button class="btn sm ghost" data-c="no">${esc(t("Close"))}</button></div>`;
+  $("#toasts").appendChild(el);
+  const close = () => { el.remove(); api("clip/dismiss", {}).catch(() => {}); };
+  setTimeout(() => el.isConnected && el.remove(), 20000);
+  el.onclick = async (ev) => {
+    const b = ev.target.closest("[data-c]"); if (!b) return;
+    const a = b.dataset.c;
+    if (a === "open") { showView("browse"); setKind("url"); $("#q").value = c.url; doSearch(); }
+    else if (a === "file") await api("download", { items: [{ kind: "file", url: c.url, title: c.url.split("/").pop() }] }).then(() => toast(t("Added to downloads"), "ok"));
+    else if (a === "audio" || a === "video") await api("download", { items: [{ url: c.url, title: c.url }], options: barOptions({ mode: a }) }).then((r) =>
+      toast(r.added ? t("Added to downloads") : r.already ? t("{n} already downloaded (skipped)", { n: 1 }) : t("Already in the download list"), "ok"));
+    close();
+  };
+}
 
 function renderChannelStrip(jobs) {
   const groups = new Map();
@@ -760,6 +850,7 @@ async function pollJobs() {
   let data;
   try { data = await api("jobs"); } catch { jobsT = setTimeout(pollJobs, 3000); return; }
   const { jobs, stats } = data;
+  if (data.clip && data.clip.at > (S.clipSeen || 0)) { S.clipSeen = data.clip.at; offerClip(data.clip); }
   if (S.sys && (S.sys.hold !== data.hold || S.sys.power !== data.power)) {
     S.sys.hold = data.hold; S.sys.power = data.power; S.sys.power_at = data.power_at;
     if (data.hold === "schedule" && !S.sys.window) refreshSystem(); else renderBanners();
@@ -798,7 +889,9 @@ async function pollJobs() {
       info = `${info} · ${t("{p}% of {size}", { p: Math.round(j.percent), size: fmtBytes(j.total) })}${j.speed ? " · " + fmtBytes(j.speed) + "/s" : ""}${j.eta != null ? " · " + t("{t} left", { t: fmtDur(j.eta) }) : ""}`;
     }
     el.querySelector(".jinfo").textContent = info;
-    el.querySelector(".jgroup").textContent = j.group ? "📁 " + j.group : "";
+    el.querySelector(".jgroup").textContent = j.group ? "📁 " + j.group : (j.kind === "file" ? "🌐 " + (j.channel || "") : "");
+    let sha = el.querySelector(".sha");
+    if (j.sha256 && !sha) { el.querySelector(".jsub").insertAdjacentHTML("beforeend", `<span class="sha" title="${esc(t("Click to copy. Compare it with the checksum on the download website to make sure the file is genuine."))}">SHA-256 ${esc(j.sha256.slice(0, 16))}…</span>`); sha = el.querySelector(".sha"); sha.onclick = () => navigator.clipboard.writeText(j.sha256).then(() => toast(t("SHA-256 copied"), "ok")); }
     el.querySelector(".bar > i").style.width = (["done", "skipped"].includes(j.status) ? 100 : j.percent || 0) + "%";
     const err = el.querySelector(".jerr"); err.textContent = j.error ? t(j.error) : ""; err.title = j.error_raw || "";
     err.classList.toggle("hidden", !j.error);
@@ -817,6 +910,14 @@ $("#jobs").addEventListener("click", async (ev) => {
   const b = ev.target.closest("[data-jact]"); if (!b) return;
   const row = b.closest(".job"); const j = row._job; const a = b.dataset.jact;
   if (a === "play") return api("open", { path: j.filepath });
+  if (a === "listen") return playFile(j.filepath, j.title);
+  if (a === "delfile") {
+    if (!confirmInline(t("Delete this file? It goes to the Recycle Bin."))) return;
+    const r = await api("files/delete", { paths: [j.filepath] });
+    toast(r.deleted ? t("{n} files moved to the Recycle Bin.", { n: r.deleted }) : t("{n} could not be deleted.", { n: 1 }), r.deleted ? "ok" : "bad");
+    refreshMarks();
+    return pollJobs();
+  }
   if (a === "show") return api("open", { path: j.filepath, select: true });
   await api("jobs/action", { ids: [j.id], action: a });
   pollJobs();
@@ -989,6 +1090,7 @@ function libRow(c) {
       <button class="btn sm ghost" data-lact="folder">${esc(t("Change folder"))}</button>
       ${c.tracked ? `<button class="btn sm ghost" data-lact="opts">${esc(t("Use current settings"))}</button>` : ""}
       ${c.tracked ? `<button class="btn sm ghost" data-lact="untrack">${esc(t("Stop tracking"))}</button>` : ""}
+      <button class="btn sm ghost" data-lact="files">${esc(t("Files"))}</button>
     </div></div>`;
 }
 function renderDupes(list) {
@@ -998,11 +1100,19 @@ function renderDupes(list) {
   const size = list.reduce((a, d) => a + (d.size || 0), 0);
   box.innerHTML = `<h4>${esc(t("Duplicate copies found: {n}", { n: list.length }))}</h4>
     <div class="muted small">${esc(t("These files are extra copies of videos you already have. Nothing was deleted. Review and delete them yourself if you want to free {size}.", { size: fmtBytes(size) }))}</div>
+    <div class="inline" style="margin-top:8px"><button class="btn sm danger" data-dupeall="1">${esc(t("Delete all extra copies"))}</button></div>
     <ul>${list.map((d, i) => `<li><span title="${esc(d.copy)}">${esc(d.copy)}</span>
-      <button class="btn sm ghost" data-dupe="${i}">${esc(t("Show in folder"))}</button></li>`).join("")}</ul>`;
-  box.onclick = (ev) => {
-    const b = ev.target.closest("[data-dupe]"); if (!b) return;
-    api("open", { path: list[+b.dataset.dupe].copy, select: true });
+      <button class="btn sm ghost" data-dupe="${i}">${esc(t("Show in folder"))}</button>
+      <button class="btn sm ghost trash" data-dupedel="${i}">${esc(t("Delete copy"))}</button></li>`).join("")}</ul>`;
+  box.onclick = async (ev) => {
+    const b = ev.target.closest("[data-dupe],[data-dupedel],[data-dupeall]"); if (!b) return;
+    if (b.dataset.dupe !== undefined) return api("open", { path: list[+b.dataset.dupe].copy, select: true });
+    const paths = b.dataset.dupeall ? list.map((d) => d.copy) : [list[+b.dataset.dupedel].copy];
+    if (!confirmInline(t("Move {n} extra copies to the Recycle Bin? The original files are kept.", { n: paths.length }))) return;
+    const r = await api("files/delete", { paths });
+    toast(t("{n} files moved to the Recycle Bin.", { n: r.deleted }), "ok");
+    S.lib.scan.duplicates = (S.lib.scan.duplicates || []).filter((d) => !paths.includes(d.copy));
+    renderDupes(S.lib.scan.duplicates);
   };
 }
 $("#libChannels").addEventListener("click", async (ev) => {
@@ -1020,8 +1130,52 @@ $("#libChannels").addEventListener("click", async (ev) => {
     return loadLibrary();
   }
   if (a === "opts") { await api("library/channel", { key, opts: barOptions() }); toast(t("Saved"), "ok"); return loadLibrary(); }
+  if (a === "files") return openChannelFiles(c);
   if (a === "untrack") { await api("library/remove", { key }); toast(t("Stopped tracking. Files and history are kept."), "ok"); return loadLibrary(); }
 });
+async function openChannelFiles(c) {
+  const m = $("#filesModal"), body = $("#filesBody");
+  m.classList.remove("hidden");
+  body.innerHTML = `<div class="loadmore"><span class="spin"></span></div>`;
+  const { files } = await api("library/files?key=" + encodeURIComponent(c.channel_id));
+  const total = files.reduce((a, f) => a + (f.size || 0), 0);
+  body.innerHTML = `<div class="fhead2"><h3>${esc(c.name || "")} · ${esc(t("{n} files", { n: files.length }))} · ${esc(fmtBytes(total) || "0 B")}</h3>
+      <button class="btn sm danger" data-fact="delsel" disabled>${esc(t("Delete selected files"))}</button>
+      <button class="btn sm danger" data-fact="delall">${esc(t("Delete all files"))}</button>
+      <button class="btn sm ghost" data-fact="forget" title="${esc(t("Forget this channel's download history. Files stay on disk, and the videos can be downloaded again."))}">${esc(t("Remove from library"))}</button></div>
+    <table class="flist"><tr><th><input type="checkbox" data-fall></th><th>${esc(t("Title"))}</th><th>${esc(t("Date"))}</th><th>${esc(t("Size"))}</th><th></th></tr>
+    ${files.map((f, i) => `<tr class="${f.exists ? "" : "missing"}"><td><input type="checkbox" data-fi="${i}" ${f.exists ? "" : "disabled"}></td>
+      <td class="t" title="${esc(f.filepath || "")}">${f.mode === "audio" ? ICON.audio : ICON.video} ${esc(f.title || f.video_id)}</td><td>${esc(fmtDate(f.upload_date))}</td><td>${esc(fmtBytes(f.size))}</td>
+      <td><div class="acts2">${f.exists ? `<button class="btn sm" data-fp="${i}">${esc(t("Play"))}</button><button class="btn sm ghost" data-fs="${i}">${esc(t("Show in folder"))}</button>` : esc(t("File deleted"))}</div></td></tr>`).join("")}</table>`;
+  const sel = () => $$("[data-fi]:checked", body).map((x) => files[+x.dataset.fi]);
+  body.onchange = (ev) => {
+    if (ev.target.dataset.fall !== undefined) $$("[data-fi]:not(:disabled)", body).forEach((x) => { x.checked = ev.target.checked; });
+    body.querySelector("[data-fact=delsel]").disabled = !sel().length;
+  };
+  body.onclick = async (ev) => {
+    const b = ev.target.closest("button"); if (!b) return;
+    if (b.dataset.fp !== undefined) { const f = files[+b.dataset.fp]; return playFile(f.filepath, f.title); }
+    if (b.dataset.fs !== undefined) return api("open", { path: files[+b.dataset.fs].filepath, select: true });
+    const act = b.dataset.fact;
+    if (act === "forget") {
+      if (!confirmInline(t("Remove {name} from the library? Files stay on disk.", { name: c.name || "" }))) return;
+      await api("library/forget", { key: c.channel_id, delete: false });
+      toast(t("Removed from the library. Files were kept."), "ok"); m.classList.add("hidden"); return loadLibrary();
+    }
+    if (act === "delall") {
+      if (!confirmInline(t("Move all {n} files of {name} to the Recycle Bin and remove the channel from the library?", { n: files.length, name: c.name || "" }))) return;
+      const r = await api("library/forget", { key: c.channel_id, delete: true });
+      toast(t("{n} files moved to the Recycle Bin.", { n: r.deleted }), "ok"); m.classList.add("hidden"); refreshMarks(); return loadLibrary();
+    }
+    if (act === "delsel") {
+      const list = sel();
+      if (!confirmInline(t("Move {n} selected files to the Recycle Bin?", { n: list.length }))) return;
+      const r = await api("files/delete", { paths: list.map((f) => f.filepath) });
+      toast(t("{n} files moved to the Recycle Bin.", { n: r.deleted }), "ok"); refreshMarks(); loadLibrary(); return openChannelFiles(c);
+    }
+  };
+}
+
 $("#libChannels").addEventListener("change", async (ev) => {
   const el = ev.target.closest("[data-lact=track]"); if (!el) return;
   const key = el.closest(".lch").dataset.key;

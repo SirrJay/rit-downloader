@@ -9,6 +9,21 @@ Public videos never need a sign-in, so keep **Settings > Sign-in** set to **Off*
 - Click **Test sign-in** to check the source right away.
 - If a sign-in can't be read, downloads **continue without it** and a banner explains what happened. Downloads no longer fail because of this.
 
+## Software and any file
+- In **Browse > Paste a link**, paste a direct download link (.exe, .msi, .zip, .7z, .dmg, .pkg, .apk, .iso, .pdf…) to download that file.
+- Or paste a program's **download page** (for example the VLC or 7-Zip download page). Rit Downloader lists every downloadable file on the page, labelled with its type (EXE, MSI, ZIP…).
+- Files download with **several connections at once** (Settings > Speed) and can be **paused and resumed**, even after a restart.
+- Each finished file shows its **SHA-256** checksum. Click it to copy, then compare it with the checksum on the website to make sure the file is genuine.
+- Programs are labelled **Program** and are never run automatically. On Windows they keep the "downloaded from the internet" mark, so SmartScreen still checks them.
+- Files are saved in a **Software** folder inside your download folder. You can rename it in Settings.
+
+## Play, delete and clear
+- **Play** audio and video right inside the app (Downloads list and Library > Files).
+- **Delete files** from Downloads ("Delete file"), from Browse (✕ on a downloaded video, or "Delete selected files") and from Library ("Files" for any channel: delete selected, delete all, or "Remove from library" to keep the files and forget the history).
+- Deleted files go to the **Recycle Bin**, so you can get them back. Only files that Rit Downloader downloaded can be deleted.
+- **Clear results** in Browse. Duplicate copies found by the library can be deleted with one click.
+- **Optional:** turn on Settings > "Offer to download links I copy". When you copy a video or download link anywhere, the app offers to download it.
+
 ## The download list
 - **What you ask for last downloads first.** A new request goes to the front of the queue, and older unfinished items wait behind it. Every waiting item shows its place ("Number 3 in line").
 - **One row per channel** when several channels are in the list, each with **Download first**, **Pause**, **Resume** and **Remove**. Click a channel's name to show only that channel.

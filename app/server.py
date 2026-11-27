@@ -82,7 +82,7 @@ except Exception:
     sys.path[:] = [p for p in sys.path if paths.UPDATES not in p]
     import engine as E  # noqa: E402
 
-from flask import Flask, abort, jsonify, make_response, request, send_from_directory  # noqa: E402
+from flask import Flask, abort, jsonify, make_response, request, send_file, send_from_directory  # noqa: E402
 
 import auth  # noqa: E402
 
@@ -355,7 +355,46 @@ def library_scan():
 @app.get("/api/jobs")
 def jobs():
     return jsonify(jobs=E.manager.list(), stats=E.manager.stats(), hold=E.manager.hold_reason,
-                   power=E.power_state.get("pending"), power_at=E.power_state.get("at"))
+                   power=E.power_state.get("pending"), power_at=E.power_state.get("at"),
+                   clip=E.clip_state if E.clip_state.get("url") else None)
+
+
+# ---- files: delete (Recycle Bin), list per channel, play -----------------------------------
+@app.post("/api/files/delete")
+def files_delete():
+    d = request.get_json() or {}
+    paths = list(d.get("paths") or [])
+    for v in d.get("vids") or []:                      # [{vid, mode}] from Browse
+        fp = E.library.is_downloaded(v.get("vid"), v.get("mode") or "audio")
+        if isinstance(fp, str):
+            paths.append(fp)
+    return jsonify(E.delete_files(paths, permanent=bool(d.get("permanent"))))
+
+
+@app.get("/api/library/files")
+def library_files():
+    return jsonify(files=E.channel_files(request.args.get("key", "")))
+
+
+@app.post("/api/library/forget")
+def library_forget():
+    d = request.get_json() or {}
+    return jsonify(E.forget_channel(d.get("key"), delete=bool(d.get("delete"))))
+
+
+@app.get("/api/media")
+def media():
+    """Stream a downloaded file to the built-in player (only files this app downloaded)."""
+    path = request.args.get("path", "")
+    if not E.is_known_path(path) or not os.path.isfile(path):
+        abort(404)
+    return send_file(path, conditional=True)
+
+
+@app.post("/api/clip/dismiss")
+def clip_dismiss():
+    E.clip_state.update({"url": None})
+    return jsonify(ok=True)
 
 
 @app.post("/api/jobs/action")

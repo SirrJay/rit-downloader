@@ -64,6 +64,7 @@
       <label class="chk"><input type="checkbox" value="streams" checked> Live streams / services</label>
       <label class="chk"><input type="checkbox" value="shorts"> Shorts</label>
       <span class="muted sep">Links work from YouTube, Facebook, Instagram, TikTok, X, Vimeo, SoundCloud, Rumble, Twitch, Dailymotion and 1,800+ other sites.</span>
+      <span class="muted sep">Software and files too: paste a download link (.exe, .msi, .zip, .dmg, .apk, .iso, .pdf...) or a program's download page, and Rit Downloader lists the files to download.</span>
     </div>
   </div>
 
@@ -103,6 +104,8 @@
       <button id="selAll" class="btn sm">Select all shown</button>
       <button id="selNone" class="btn ghost sm">Clear</button>
       <button id="exportBtn" class="btn ghost sm" title="Save this list as a spreadsheet (CSV)">Export list</button>
+      <button id="delSel" class="btn ghost sm hidden" title="Move the downloaded files of the selected videos to the Recycle Bin">Delete selected files</button>
+      <button id="clearResults" class="btn ghost sm" title="Close these results">Clear results</button>
       <div class="seg sm" id="viewSeg">
         <button data-v="grid" class="on" title="Grid"><svg class="ico" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></button>
         <button data-v="list" title="List"><svg class="ico" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
@@ -278,6 +281,12 @@
           <option value="">No limit</option><option value="500K">500 KB/s</option><option value="1M">1 MB/s</option><option value="2M">2 MB/s</option><option value="5M">5 MB/s</option>
         </select>
       </label>
+      <label class="field">Folder for software and other files (inside the download folder)<input data-set="files_folder" placeholder="Software" spellcheck="false"></label>
+      <label class="field">Connections for software and file downloads
+        <select data-set="file_connections" data-num>
+          <option value="1">1</option><option value="2">2</option><option value="4">4 (recommended)</option><option value="8">8</option><option value="16">16</option>
+        </select>
+      </label>
       <label class="toggle"><input type="checkbox" data-set="auto_retry"><span></span> Retry automatically after network problems or YouTube limits (up to 3 times)</label>
       <label class="toggle"><input type="checkbox" data-set="schedule_enabled"><span></span> Only download between these hours (for example cheaper night-time data)</label>
       <div class="inline">
@@ -349,6 +358,7 @@
       <label class="field">Language
         <select class="langsel" id="langSet" data-no-i18n></select>
       </label>
+      <label class="toggle"><input type="checkbox" data-set="watch_clipboard"><span></span> Offer to download links I copy (videos, software, files)</label>
       <label class="toggle"><input type="checkbox" data-set="notify_done"><span></span> Show a notification when downloads finish</label>
       <label class="field">Theme
         <select data-set="theme"><option value="dark">Dark</option><option value="light">Light</option></select>
@@ -457,6 +467,20 @@
       <button class="linkbtn" type="button" id="forgotBtn">Forgot your password?</button>
       <p class="muted small hidden" id="forgotText" data-no-i18n></p>
     </form>
+  </div>
+</div>
+
+<div class="modal hidden" id="playerModal">
+  <div class="modal-card player-card">
+    <button class="btn ghost icon close" data-close title="Close"><svg class="ico" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+    <h3 id="playerTitle" data-no-i18n></h3>
+    <div id="playerBox" data-no-i18n></div>
+  </div>
+</div>
+<div class="modal hidden" id="filesModal">
+  <div class="modal-card">
+    <button class="btn ghost icon close" data-close title="Close"><svg class="ico" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+    <div id="filesBody" data-no-i18n></div>
   </div>
 </div>
 

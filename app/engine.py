@@ -11,6 +11,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+import fileget
 import library
 import paths
 from paths import DATA, IS_MAC, IS_WIN
@@ -147,6 +148,9 @@ DEFAULTS = {
     "normalize_audio": False,
     "min_minutes_sync": 0,
     "history_limit": 3000,
+    "files_folder": "Software",
+    "file_connections": 4,
+    "watch_clipboard": False,
     "search_limit": 50,
     "theme": "dark",
     "language": "",
@@ -567,6 +571,70 @@ def _iter_entries(b, ydl, url, tab=None, depth=0):
         b.add(normalize(info, tab))
 
 
+_MEDIA_IE = None
+
+
+def has_media_extractor(url):
+    """True if a specific yt-dlp extractor (not the generic one) handles this link."""
+    global _MEDIA_IE
+    if _MEDIA_IE is None:
+        from yt_dlp.extractor import gen_extractor_classes
+        _MEDIA_IE = []
+        for ie in gen_extractor_classes():
+            try:
+                if ie.ie_key() != "Generic" and ie.working():
+                    _MEDIA_IE.append(ie)
+            except Exception:
+                continue
+    for ie in _MEDIA_IE:
+        try:
+            if ie.suitable(url):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def file_entry(info, text=""):
+    name = info.get("name") or "download"
+    return {"id": "file:" + info["url"], "kind": "file", "url": info["url"], "title": name, "vid": None,
+            "size": info.get("size"), "mime": info.get("mime", ""), "ext": info.get("ext") or fileget.ext_of(name),
+            "executable": bool(info.get("executable")), "host": info.get("host", ""), "text": text,
+            "channel": info.get("host", ""), "thumb": "", "duration": None, "date": None}
+
+
+def browse_file_link(b, url):
+    """Handle a pasted non-video link. Returns True when it was handled as a file / page with files."""
+    try:
+        info = fileget.probe(url)
+    except Exception:
+        return False
+    if info["is_file"]:
+        b.title = info["name"]
+        b.add(file_entry(info))
+        b.status = "1 file"
+        return True
+    if info["html"]:
+        try:
+            page = fileget.scan_page(info["final_url"] or url)
+        except Exception:
+            return False
+        if page["links"]:
+            b.title = page["title"]
+            b.page_url = page["final_url"]
+            for l in page["links"]:
+                b.add(file_entry({"url": l["url"], "name": l["name"], "ext": l["ext"], "executable": l["executable"],
+                                  "host": l["host"]}, l["text"]))
+            b.status = f"{len(page['links'])} files"
+            # the page might also contain videos: let yt-dlp try as well (failures are ignored)
+            return not looks_like_video_page(page)
+    return False
+
+
+def looks_like_video_page(page):
+    return False
+
+
 def _run_browse(b):
     s = settings.get()
     req = b.req
@@ -599,6 +667,10 @@ def _run_browse(b):
                 urls = [(base + YT_TABS[t], t) for t in tabs if t in YT_TABS]
             else:
                 urls = [(q, None)]
+                if not has_media_extractor(q):
+                    # not a known video site: it may be a direct file link or a software download page
+                    if browse_file_link(b, q):
+                        return
         with yt_dlp.YoutubeDL(opts) as ydl:
             for u, tab in urls:
                 if b.cancel:
@@ -615,8 +687,11 @@ def _run_browse(b):
             b.title = b.title.replace(" - Videos", "").replace(" - Live", "")
         b.status = "Stopped" if b.cancel else f"{len(b.entries)} items"
     except Exception as ex:
-        b.error = clean_error(ex)
-        b.status = "Error"
+        if b.entries and any(e.get("kind") == "file" for e in b.entries):
+            b.status = f"{len(b.entries)} files"
+        else:
+            b.error = clean_error(ex)
+            b.status = "Error"
     finally:
         b.done = True
 
@@ -662,6 +737,8 @@ ERROR_RULES = [
     ("unavailable", ("video unavailable", "has been removed", "not available", "does not exist", "account associated"),
      "This video is unavailable or was removed."),
     ("disk", ("no space left", "errno 28", "disk full", "not enough space"), "The disk is full."),
+    ("unsupported", ("unsupported url", "no video formats found", "no video could be found"),
+     "No videos or downloadable files were found at this link."),
     ("ffmpeg", ("ffmpeg not found", "ffprobe not found", "ffmpeg is not installed"),
      "Video tools (ffmpeg) are missing. Use Settings > Repair."),
     ("network", ("getaddrinfo", "timed out", "timeout", "connection reset", "connection aborted", "errno 11001",
@@ -736,7 +813,7 @@ class Job:
     FIELDS = ("id", "url", "title", "thumb", "group", "format_id", "opts", "status", "percent",
               "speed", "eta", "downloaded", "total", "stage", "filepath", "error", "created",
               "finished", "channel", "duration", "vid", "site", "channel_id", "force",
-              "section", "attempts", "retry_at", "error_raw", "batch", "seq")
+              "section", "attempts", "retry_at", "error_raw", "batch", "seq", "kind", "sha256", "referrer")
 
     def __init__(self, url, title="", thumb="", group=None, format_id=None, opts=None,
                  channel="", duration=None):
@@ -758,6 +835,9 @@ class Job:
         self.section = None          # "HH:MM:SS-HH:MM:SS" = download only that part
         self.batch = time.time()     # newest request is downloaded first
         self.seq = 0                 # order inside a request
+        self.kind = "media"          # "media" (yt-dlp) | "file" (direct download)
+        self.sha256 = None
+        self.referrer = None
         self.attempts = 0
         self.retry_at = None
         self.error_raw = None
@@ -875,6 +955,9 @@ class Manager:
             active = set()
             for j in self.jobs:
                 if j.status in ("queued", "running", "paused"):
+                    if j.kind == "file":
+                        active.add(("file", j.url))
+                        continue
                     active.add((j.url, j.format_id, j.opts.get("mode")))
                     if j.vid:
                         active.add((j.vid, j.opts.get("mode")))
@@ -883,6 +966,23 @@ class Manager:
                 if not url:
                     continue
                 vid = it.get("vid")
+                if it.get("kind") == "file":
+                    if ("file", url) in active:
+                        queued += 1
+                        continue
+                    prev = next((x for x in self.jobs if x.kind == "file" and x.url == url and x.status == "done"
+                                 and x.filepath and os.path.isfile(x.filepath)), None)
+                    if prev and not force:
+                        already += 1
+                        continue
+                    active.add(("file", url))
+                    j = Job(url, it.get("title"), "", None, None, dict(s), it.get("host") or "", None)
+                    j.kind, j.referrer, j.force = "file", it.get("referrer"), bool(force)
+                    self._seq += 1
+                    j.batch, j.seq = batch, self._seq
+                    self.jobs.append(j)
+                    added += 1
+                    continue
                 if (url, it.get("format_id"), mode) in active or (vid and (vid, mode) in active):
                     queued += 1
                     continue
@@ -1031,6 +1131,8 @@ class Manager:
             threading.Thread(target=self._run, args=(nxt,), daemon=True).start()
 
     def _run(self, job):
+        if job.kind == "file":
+            return self._run_file(job)
         job.skipped = False
         job.last_error = None
         s = {}
@@ -1113,6 +1215,80 @@ class Manager:
                     job.status, job.stage = "queued", "Waiting to retry..."
                 else:
                     job.status, job.stage = "error", "Failed"
+        finally:
+            job.finished = time.time()
+            job.speed = job.eta = None
+            job.stop_reason = None
+            with self.cv:
+                self.running -= 1
+                if getattr(job, "remove_after", False) and job in self.jobs:
+                    self.jobs.remove(job)
+            self.touch()
+
+    def _run_file(self, job):
+        s = settings.get()
+        try:
+            folder = os.path.join(s["download_dir"], library.safe_folder_name(s.get("files_folder") or "Software"))
+            os.makedirs(folder, exist_ok=True)
+            # keep the same target while resuming; choose a free name the first time
+            dest = job.filepath if (job.filepath and os.path.exists(job.filepath + ".ripart")) else None
+            if not dest:
+                job.stage = "Starting..."
+                info = fileget.probe(job.url)
+                if not info["is_file"]:
+                    raise RuntimeError("This link opens a web page, not a file. Paste it in Browse to list the files on that page.")
+                job.title = info["name"]
+                job.total = info["size"]
+                free = free_space_gb(folder)
+                if free is not None and (free < float(s.get("min_free_gb") or 0)
+                                         or (info["size"] and info["size"] / 2**30 > free)):
+                    raise DiskLow()
+                dest = fileget.unique_path(folder, info["name"])
+                job.filepath = dest
+            rl = None
+            if s.get("rate_limit"):
+                v = str(s["rate_limit"]).upper()
+                rl = float(v[:-1]) * (1024 if v.endswith("K") else 1024 * 1024) if v[-1] in "KM" else float(v)
+
+            def prog(done, total, speed):
+                job.downloaded, job.total, job.speed = done, total, speed
+                job.percent = round(done * 100 / total, 1) if total else job.percent
+                job.eta = (total - done) / speed if (total and speed) else None
+                job.stage = "Downloading file"
+
+            final = fileget.download(job.url, dest, connections=int(s.get("file_connections") or 4), progress=prog,
+                                     stop=lambda: bool(job.stop_reason), rate_limit=rl,
+                                     proxy=s.get("proxy") or None, referrer=job.referrer)
+            job.filepath = final
+            job.title = os.path.basename(final)
+            job.stage = "Checking file (SHA-256)..."
+            job.sha256 = fileget.sha256_of(final, stop=lambda: bool(job.stop_reason))
+            job.status, job.stage, job.percent = "done", "Completed", 100
+            job.error = job.error_raw = None
+        except fileget.Stopped:
+            job.status, job.stage = ("paused", "Paused") if job.stop_reason == "pause" else ("canceled", "Canceled")
+            if job.status == "canceled" and job.filepath:
+                for ext in (".ripart", ".ripart.json"):
+                    try:
+                        os.remove(job.filepath + ext)
+                    except OSError:
+                        pass
+        except DiskLow:
+            job.status, job.stage = "paused", "Paused: not enough disk space"
+            self.hold = "disk"
+        except Exception as ex:
+            raw = str(ex)
+            code, friendly = classify_error(raw)
+            job.error, job.error_raw = (friendly if code != "other" else raw[:300]), raw[:800]
+            if code == "network" and not is_online():
+                job.status, job.stage, job.retry_at = "queued", "Waiting for internet connection...", None
+                self.hold, self._offline_check = "offline", time.time()
+            elif code in RETRYABLE and s.get("auto_retry", True) and job.attempts < 3:
+                job.attempts += 1
+                job.retry_at = time.time() + RETRYABLE[code] * job.attempts
+                job.status, job.stage = "queued", "Waiting to retry..."
+            else:
+                job.status, job.stage = "error", "Failed"
         finally:
             job.finished = time.time()
             job.speed = job.eta = None
@@ -1682,3 +1858,148 @@ def pick_file(initial):
         except OSError:
             pass
     return os.path.normpath(p) if p else None
+
+
+
+# --------------------------------------------------------------------------- deleting files / playing files
+def known_paths():
+    """Every file this app downloaded (library + download list). Only these may be deleted or played."""
+    out = set()
+    with library._lock:
+        for r in library._db().execute("SELECT filepath FROM downloads WHERE filepath IS NOT NULL"):
+            out.add(os.path.normcase(os.path.abspath(r["filepath"])))
+    for j in manager.list():
+        if j.get("filepath"):
+            out.add(os.path.normcase(os.path.abspath(j["filepath"])))
+    for d in scan_state.get("duplicates") or []:          # extra copies found by the library scan
+        out.add(os.path.normcase(os.path.abspath(d["copy"])))
+    return out
+
+
+def is_known_path(path):
+    return bool(path) and os.path.normcase(os.path.abspath(path)) in known_paths()
+
+
+def delete_files(paths, permanent=False):
+    """Move downloaded files to the Recycle Bin (or delete them) and forget them in the library.
+    Only files this app downloaded can be deleted. Returns {"deleted": n, "missing": n, "failed": [..]}."""
+    known = known_paths()
+    deleted = missing = 0
+    failed = []
+    for p in dict.fromkeys(paths or []):
+        if not p:
+            continue
+        ap = os.path.abspath(p)
+        if os.path.normcase(ap) not in known:
+            failed.append({"path": p, "error": "not downloaded by this app"})
+            continue
+        try:
+            if os.path.exists(ap):
+                if permanent:
+                    os.remove(ap)
+                else:
+                    from send2trash import send2trash
+                    send2trash(ap)
+                deleted += 1
+            else:
+                missing += 1
+            for side in (".ripart", ".ripart.json"):
+                if os.path.exists(ap + side):
+                    os.remove(ap + side)
+        except Exception as ex:
+            failed.append({"path": p, "error": str(ex)[:200]})
+            continue
+        with library._lock:
+            library._db().execute("DELETE FROM downloads WHERE filepath=?", (ap,))
+            library._db().execute("DELETE FROM downloads WHERE filepath=?", (p,))
+            library._db().commit()
+        with manager.lock:
+            for j in manager.jobs:
+                if j.filepath and os.path.normcase(os.path.abspath(j.filepath)) == os.path.normcase(ap):
+                    j.filepath, j.stage = None, "File deleted"
+        manager.touch()
+    return {"deleted": deleted, "missing": missing, "failed": failed}
+
+
+def channel_files(key):
+    with library._lock:
+        rows = library._db().execute("""SELECT video_id, mode, filepath, title, size, upload_date, created
+                                        FROM downloads WHERE channel_id=? ORDER BY upload_date DESC, created DESC""",
+                                     (key,)).fetchall()
+    return [{**dict(r), "exists": bool(r["filepath"] and os.path.isfile(r["filepath"]))} for r in rows]
+
+
+def forget_channel(key, delete=False):
+    """Remove a channel from the library. delete=True also moves its files to the Recycle Bin."""
+    res = {"deleted": 0, "missing": 0, "failed": []}
+    if delete:
+        res = delete_files([f["filepath"] for f in channel_files(key) if f["filepath"]])
+    with library._lock:
+        library._db().execute("DELETE FROM downloads WHERE channel_id=?", (key,))
+        library._db().execute("DELETE FROM channels WHERE channel_id=?", (key,))
+        library._db().commit()
+    sync_state.pop(key, None)
+    return res
+
+
+# --------------------------------------------------------------------------- clipboard: offer to download copied links
+clip_state = {"url": None, "at": 0}
+_URL_RE = re.compile(r"^https?://\S{6,2000}$")
+
+
+def _read_clipboard():
+    if IS_WIN:
+        import ctypes
+        from ctypes import wintypes
+        u32, k32 = ctypes.windll.user32, ctypes.windll.kernel32
+        u32.GetClipboardData.restype = wintypes.HANDLE
+        k32.GlobalLock.restype = ctypes.c_void_p
+        k32.GlobalLock.argtypes = [wintypes.HANDLE]
+        k32.GlobalUnlock.argtypes = [wintypes.HANDLE]
+        if not u32.IsClipboardFormatAvailable(13) or not u32.OpenClipboard(None):
+            return None
+        try:
+            h = u32.GetClipboardData(13)
+            if not h:
+                return None
+            ptr = k32.GlobalLock(h)
+            if not ptr:
+                return None
+            try:
+                return ctypes.wstring_at(ptr)[:2100]
+            finally:
+                k32.GlobalUnlock(h)
+        finally:
+            u32.CloseClipboard()
+    if IS_MAC:
+        try:
+            return subprocess.run(["pbpaste"], capture_output=True, text=True, timeout=2).stdout[:2100]
+        except Exception:
+            return None
+    return None
+
+
+def _clipboard_loop():
+    last = None
+    first = True
+    while True:
+        time.sleep(1.5)
+        if not settings.get().get("watch_clipboard"):
+            first = True
+            continue
+        try:
+            txt = (_read_clipboard() or "").strip()
+        except Exception:
+            continue
+        if first:                      # ignore whatever was already copied before the option was turned on
+            last, first = txt, False
+            continue
+        if txt and txt != last:
+            last = txt
+            if _URL_RE.match(txt):
+                clip_state.update({"url": txt, "at": time.time(),
+                                   "kind": "media" if has_media_extractor(txt) else
+                                   ("file" if fileget.looks_like_file_url(txt) else "link")})
+
+
+threading.Thread(target=_clipboard_loop, daemon=True).start()

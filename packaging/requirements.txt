@@ -6,3 +6,4 @@ pystray
 pillow
 certifi
 pyinstaller>=6.16
+send2trash
