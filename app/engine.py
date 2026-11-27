@@ -151,6 +151,7 @@ DEFAULTS = {
     "files_folder": "Software",
     "file_connections": 4,
     "watch_clipboard": False,
+    "stream_quality": 720,
     "search_limit": 50,
     "theme": "dark",
     "language": "",
@@ -334,6 +335,10 @@ def build_download_args(s, group=None, format_id=None, no_cookies=False, section
             sort += ["vcodec:h264", "acodec:m4a"]
         if format_id:
             a += ["-f", f"{format_id}+ba/{format_id}"]
+        elif s.get("video_codec") == "compatible" and cont != "webm":
+            # never HEVC/H.265 in "most compatible" mode - it does not play on many PCs, phones and TVs
+            nohevc = "[vcodec!^=hev][vcodec!^=hvc][vcodec!^=h265]"
+            a += ["-f", f"bv*{nohevc}+ba/b{nohevc}/bv*+ba/b"]
         else:
             a += ["-f", "bv*+ba/b"]
         if sort:
@@ -815,7 +820,8 @@ class Job:
     FIELDS = ("id", "url", "title", "thumb", "group", "format_id", "opts", "status", "percent",
               "speed", "eta", "downloaded", "total", "stage", "filepath", "error", "created",
               "finished", "channel", "duration", "vid", "site", "channel_id", "force",
-              "section", "attempts", "retry_at", "error_raw", "batch", "seq", "kind", "sha256", "referrer")
+              "section", "attempts", "retry_at", "error_raw", "batch", "seq", "kind", "sha256", "referrer",
+              "scheduled_at")
 
     def __init__(self, url, title="", thumb="", group=None, format_id=None, opts=None,
                  channel="", duration=None):
@@ -838,6 +844,7 @@ class Job:
         self.batch = time.time()     # newest request is downloaded first
         self.seq = 0                 # order inside a request
         self.kind = "media"          # "media" (yt-dlp) | "file" (direct download)
+        self.scheduled_at = None     # epoch seconds: wait until then ("scheduled" status)
         self.sha256 = None
         self.referrer = None
         self.attempts = 0
@@ -942,7 +949,7 @@ class Manager:
             self.cv.notify_all()
 
     # API --------------------------------------------------------------------
-    def add(self, items, opts_override=None, group=None, force=False):
+    def add(self, items, opts_override=None, group=None, force=False, schedule_at=None):
         """Queue downloads. Videos already in the library (for this mode) are skipped unless force=True.
         Returns {"added", "already" (in library), "queued" (already in the list)}."""
         s = settings.get()
@@ -1002,7 +1009,10 @@ class Manager:
                 j.batch, j.seq = batch, self._seq
                 self.jobs.append(j)
                 added += 1
-            if added:
+            if schedule_at and float(schedule_at) > time.time() + 5:
+                for j in self.jobs[-added:] if added else []:
+                    j.status, j.stage, j.scheduled_at = "scheduled", "Scheduled", float(schedule_at)
+            elif added:
                 self._start_batch()
             self._trim_history(s.get("history_limit") or 3000)
         self.touch()
@@ -1021,7 +1031,7 @@ class Manager:
             self.batch_start = time.time()
 
     def _trim_history(self, limit):
-        done = [j for j in self.jobs if j.status in ("done", "skipped", "canceled")]
+        done = [j for j in self.jobs if j.status in ("done", "skipped", "canceled")]  # never scheduled/queued ones
         if len(done) > limit:
             drop = set(id(j) for j in sorted(done, key=lambda j: j.finished or j.created)[:len(done) - limit])
             self.jobs = [j for j in self.jobs if id(j) not in drop]
@@ -1051,14 +1061,19 @@ class Manager:
         # newest request first; inside a request keep the original order
         return (j.batch or j.created or 0, -(j.seq or 0))
 
-    def action(self, ids, act):
+    def action(self, ids, act, value=None):
         with self.lock:
             targets = [j for j in self.jobs if (ids == "all" or j.id in ids)]
             for j in targets:
+                if act == "schedule" and value and j.status in ("queued", "paused", "scheduled", "error", "canceled"):
+                    j.status, j.stage, j.scheduled_at = "scheduled", "Scheduled", float(value)
+                    j.error = j.error_raw = None
+                    j.attempts, j.retry_at = 0, None
+                    continue
                 if act == "cancel":
                     if j.status == "running":
                         j.stop_reason = "cancel"
-                    elif j.status in ("queued", "paused"):
+                    elif j.status in ("queued", "paused", "scheduled"):
                         j.status, j.stage = "canceled", ""
                 elif act == "pause":
                     if j.status == "running":
@@ -1081,7 +1096,7 @@ class Manager:
                 # "Download first": move these to the front of the queue (newest request)
                 now = time.time()
                 for j in targets:
-                    if j.status in ("queued", "paused", "error", "canceled"):
+                    if j.status in ("queued", "paused", "error", "canceled", "scheduled"):
                         if j.status != "queued":
                             j.status, j.stage, j.error, j.error_raw, j.attempts, j.retry_at = "queued", "", None, None, 0, None
                         j.batch = now
@@ -1089,7 +1104,7 @@ class Manager:
                 self.hold = None if self.hold == "disk" else self.hold
                 self._start_batch()
             if act == "clear":
-                self.jobs = [j for j in self.jobs if j.status in ("queued", "running", "paused")]
+                self.jobs = [j for j in self.jobs if j.status in ("queued", "running", "paused", "scheduled")]
             elif act == "clear_failed":
                 self.jobs = [j for j in self.jobs if j.status not in ("error", "canceled")]
             elif act == "clear_all":
@@ -1115,6 +1130,12 @@ class Manager:
                 st = settings.get()
                 limit = max(1, min(8, int(st.get("concurrency") or 1)))
                 nxt = None
+                now0 = time.time()
+                for sj in self.jobs:
+                    if sj.status == "scheduled" and (sj.scheduled_at or 0) <= now0:
+                        sj.status, sj.stage, sj.batch, sj.scheduled_at = "queued", "", now0, None
+                        self._start_batch()
+                        self._dirty = True
                 if self.hold == "offline" and time.time() - self._offline_check > 10:
                     self._offline_check = time.time()
                     threading.Thread(target=self._recheck_online, daemon=True).start()
@@ -2009,8 +2030,11 @@ threading.Thread(target=_clipboard_loop, daemon=True).start()
 
 
 # --------------------------------------------------------------------------- built-in player: everything playable
-PLAYABLE_AUDIO = {"mp3", "m4a", "opus", "ogg", "oga", "flac", "wav", "aac"}
-PLAYABLE_VIDEO = {"mp4", "webm", "mkv", "mov", "m4v"}
+# the player converts anything the browser cannot play, so every common format is listed
+PLAYABLE_AUDIO = {"mp3", "m4a", "opus", "ogg", "oga", "flac", "wav", "aac", "wma", "ac3", "eac3", "dts", "aiff", "aif",
+                  "m4b", "amr", "mka", "alac", "ape", "wv"}
+PLAYABLE_VIDEO = {"mp4", "webm", "mkv", "mov", "m4v", "avi", "wmv", "flv", "mpg", "mpeg", "ts", "m2ts", "mts", "3gp",
+                  "vob", "ogv", "asf", "divx", "f4v"}
 
 
 def player_items():

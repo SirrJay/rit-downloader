@@ -14,8 +14,8 @@ from paths import DATA
 
 DB_FILE = os.path.join(DATA, "library.db")
 
-AUDIO_EXT = {"mp3", "m4a", "opus", "ogg", "oga", "flac", "wav", "aac", "mka", "alac", "aiff"}
-VIDEO_EXT = {"mp4", "mkv", "webm", "mov", "avi", "flv", "m4v", "3gp", "ts"}
+AUDIO_EXT = {"mp3", "m4a", "opus", "ogg", "oga", "flac", "wav", "aac", "mka", "alac", "aiff", "aif", "wma", "ac3", "m4b", "amr"}
+VIDEO_EXT = {"mp4", "mkv", "webm", "mov", "avi", "flv", "m4v", "3gp", "ts", "wmv", "mpg", "mpeg", "m2ts", "vob", "ogv", "asf"}
 # "...Title [VIDEOID].ext" - the naming scheme used by Rit Downloader and yt-dlp's default template
 ID_IN_NAME = re.compile(r"\[([0-9A-Za-z_-]{6,64})\]\.([0-9A-Za-z]{2,5})$")
 

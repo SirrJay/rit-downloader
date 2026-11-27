@@ -151,8 +151,46 @@ const PLACEHOLDER = {
   url: "Paste a link to a channel, playlist or video from YouTube, Facebook, TikTok...",
   software: "Paste a software download link or a program's download page (any website)",
 };
+/* Each Browse tab (Videos, Channels, Playlists, Paste a link, Software & files) keeps its OWN search text,
+   results, filters, Back history and scroll position. A search keeps loading into its own tab even while you
+   look at another tab. */
+const TAB_FIELDS = ["req", "entries", "byId", "sel", "shown", "browseId", "since", "loading", "title", "group", "history",
+  "lastIdx", "renderedCount", "channel"];
+S.tabs = {};
+function freshTab() {
+  return { req: null, entries: [], byId: new Map(), sel: new Set(), shown: [], browseId: null, since: 0, loading: false,
+    title: "", group: "", history: [], lastIdx: null, renderedCount: 0, channel: null,
+    q: "", filter: "", dur: "", sort: "", hide: false, status: "", loadingText: "", scroll: 0 };
+}
+function stashTab(k) {
+  const o = S.tabs[k] || freshTab();
+  TAB_FIELDS.forEach((f) => { o[f] = S[f]; });
+  Object.assign(o, { q: $("#q").value, filter: $("#filter").value, dur: $("#durFilter").value, sort: $("#sort").value,
+    hide: $("#hideHave").checked, status: $("#rStatus").textContent, loadingText: $("#loadingText").textContent,
+    scroll: $("main").scrollTop });
+  S.tabs[k] = o;
+}
+function restoreTab(k) {
+  const o = S.tabs[k] || (S.tabs[k] = freshTab());
+  TAB_FIELDS.forEach((f) => { S[f] = o[f]; });
+  $("#q").value = o.q; $("#filter").value = o.filter; $("#durFilter").value = o.dur; $("#sort").value = o.sort; $("#hideHave").checked = o.hide;
+  const has = !!S.req;
+  $("#hero").classList.toggle("hidden", has);
+  $("#resultsHead").classList.toggle("hidden", !has);
+  $("#rTitle").textContent = S.title; $("#rTitle").title = S.title;
+  $("#rStatus").textContent = o.status || (has ? countText(S.entries.length) : "");
+  $("#backBtn").classList.toggle("hidden", !S.history.length);
+  $("#loadingMore").classList.toggle("hidden", !S.loading);
+  $("#stopLoad").classList.toggle("hidden", !S.loading);
+  $("#loadingText").textContent = o.loadingText || t("Loading...");
+  S.renderedCount = 0; S.shown = [];
+  if (has) render(true); else $("#results").innerHTML = "";
+  renderChanBar(); updateSelInfo();
+  requestAnimationFrame(() => { $("main").scrollTop = o.scroll || 0; });
+}
 function setKind(k, focus = true) {
-  S.kind = k;
+  if (S.kindReady && k !== S.kind) { stashTab(S.kind); S.kind = k; restoreTab(k); }
+  S.kind = k; S.kindReady = true;
   $$("#kindSeg button").forEach((b) => b.classList.toggle("on", b.dataset.kind === k));
   $("#q").placeholder = t(PLACEHOLDER[k]);
   $("#urlOpts").classList.toggle("hidden", k !== "url");
@@ -167,10 +205,6 @@ function setKind(k, focus = true) {
 }
 $("#kindSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) setKind(b.dataset.kind); });
 $("#q").addEventListener("keydown", (e) => { if (e.key === "Enter") doSearch(); });
-$("#q").addEventListener("paste", () => setTimeout(() => {
-  const v = $("#q").value.trim();
-  if (/^https?:\/\//i.test(v) && S.kind !== "url" && S.kind !== "software") setKind("url");
-}, 0));
 $("#go").addEventListener("click", doSearch);
 $("#softPicks").addEventListener("click", (e) => {
   const b = e.target.closest("[data-url]"); if (!b) return;
@@ -185,13 +219,10 @@ function doSearch() {
   let q = $("#q").value.trim();
   if (!q) { $("#q").focus(); return; }
   let kind = S.kind;
-  if (/^https?:\/\//i.test(q) || /^(www\.)?[\w-]+\.(com|be|tv|net|org)\//i.test(q)) {
-    kind = "url"; if (!/^https?:/i.test(q)) q = "https://" + q;
-  }
-  if (kind === "software") {
-    if (!/^https?:\/\//i.test(q)) { toast(t("Paste a link that starts with http:// or https://"), "bad"); return; }
-    kind = "url";
-  }
+  const isLink = /^https?:\/\//i.test(q) || /^(www\.)?[\w-]+\.(com|be|tv|net|org)\//i.test(q);
+  if (isLink && !/^https?:/i.test(q)) q = "https://" + q;
+  if (kind === "software" && !isLink) { toast(t("Paste a link that starts with http:// or https://"), "bad"); return; }
+  if (isLink) kind = "url";            // the results still stay in the tab you are in
   const req = { kind, query: q, platform: $("#platform").value, limit: +$("#limit").value };
   if (kind === "url") req.tabs = urlTabs().length ? urlTabs() : ["videos"];
   startBrowse(req, true);
@@ -208,20 +239,25 @@ async function startBrowse(req, pushHistory) {
     if (S.history.length > 15) S.history.shift();
   }
   if (S.browseId && S.loading) api(`browse/${S.browseId}/stop`, {}).catch(() => {});
-  S.req = req; S.entries = []; S.byId.clear(); S.sel.clear(); S.since = 0; S.lastIdx = null; S.channel = null;
+  S.req = req; S.entries = []; S.byId = new Map(); S.sel = new Set(); S.since = 0; S.lastIdx = null; S.channel = null; S.browseId = null;
   renderChanBar();
   S.title = req.kind === "search" ? t('Results for "{q}"', { q: req.query }) : t("Loading..."); S.group = req.kind === "search" ? req.query : "";
   $("#filter").value = ""; $("#durFilter").value = ""; $("#sort").value = "";
   $("#hero").classList.add("hidden");
   $("#resultsHead").classList.remove("hidden");
+  $("#rTitle").textContent = S.title;
+  $("#rStatus").textContent = "";
   $("#backBtn").classList.toggle("hidden", !S.history.length);
   render(true);
   setLoading(true, t("Contacting the site..."));
+  const key = S.kind;
   try {
     const { id } = await api("browse", req);
-    S.browseId = id;
-    pollBrowse(id);
-  } catch (e) { setLoading(false); toast(e.message, "bad"); }
+    const box = S.kind === key ? S : S.tabs[key];
+    if (!box || box.req !== req) { api(`browse/${id}/stop`, {}).catch(() => {}); return; }
+    box.browseId = id;
+    pollBrowse(id, key);
+  } catch (e) { if (S.kind === key) setLoading(false); toast(e.message, "bad"); }
 }
 
 function setLoading(on, text) {
@@ -232,35 +268,45 @@ function setLoading(on, text) {
   renderChanBar();
 }
 
-async function pollBrowse(id) {
-  if (id !== S.browseId) return;
+async function pollBrowse(id, key = S.kind) {
+  const boxOf = () => (S.kind === key ? S : S.tabs[key]);
+  let b = boxOf();
+  if (!b || b.browseId !== id) return;
   let snap;
-  try { snap = await api(`browse/${id}?since=${S.since}`); } catch (e) { setLoading(false); toast(e.message, "bad"); return; }
-  if (id !== S.browseId) return;
+  try { snap = await api(`browse/${id}?since=${b.since}`); } catch (e) {
+    b = boxOf(); if (b) b.loading = false; if (b === S) setLoading(false); toast(e.message, "bad"); return;
+  }
+  b = boxOf();
+  if (!b || b.browseId !== id) return;
+  const active = b === S;
   if (snap.entries.length) {
-    for (const e of snap.entries) { if (!S.byId.has(e.id)) { S.byId.set(e.id, e); S.entries.push(e); } }
-    S.since = snap.total;
-    render(false);
+    for (const e of snap.entries) { if (!b.byId.has(e.id)) { b.byId.set(e.id, e); b.entries.push(e); } }
+    b.since = snap.total;
+    if (active) render(false);
   }
-  if (snap.title && S.req.kind !== "search") {
-    S.title = snap.title.replace(/ - (Videos|Live|Shorts|Home)$/i, "");
-    S.group = S.req.kind === "url" ? S.title : S.group;
+  if (snap.title && b.req.kind !== "search") {
+    b.title = snap.title.replace(/ - (Videos|Live|Shorts|Home)$/i, "");
+    b.group = b.req.kind === "url" ? b.title : b.group;
   }
-  if (S.req.kind === "channels" || S.req.kind === "playlists") S.title = snap.title;
-  if (snap.channel) { S.channel = snap.channel; }
-  renderChanBar();
-  $("#rTitle").textContent = S.title;
-  $("#rTitle").title = S.title;
-  const n = S.entries.length;
+  if (b.req.kind === "channels" || b.req.kind === "playlists") b.title = snap.title;
+  if (snap.channel) b.channel = snap.channel;
+  const n = b.entries.length;
+  if (active) { renderChanBar(); $("#rTitle").textContent = b.title; $("#rTitle").title = b.title; }
   if (snap.done) {
-    setLoading(false);
-    $("#rStatus").textContent = snap.error && !n ? t("Error") : countText(n);
+    b.loading = false;
+    const status = snap.error && !n ? t("Error") : countText(n);
+    if (active) {
+      setLoading(false);
+      $("#rStatus").textContent = status;
+      if (!n && !snap.error) $("#results").innerHTML = `<div class="hero small"><h2>${esc(t("Nothing found"))}</h2><p class="muted">${t("Try different words, or choose <em>Channels &amp; people</em> to find the person's channel.")}</p></div>`;
+    } else b.status = status;
     if (snap.error) toast(snap.error, "bad");
-    if (!n && !snap.error) $("#results").innerHTML = `<div class="hero small"><h2>${esc(t("Nothing found"))}</h2><p class="muted">${t("Try different words, or choose <em>Channels &amp; people</em> to find the person's channel.")}</p></div>`;
   } else {
-    $("#rStatus").textContent = t("{n} loaded", { n: n.toLocaleString() });
-    $("#loadingText").textContent = n ? t("Loading more... {n} so far. Large channels can take a minute.", { n: n.toLocaleString() }) : t("Contacting the site...");
-    setTimeout(() => pollBrowse(id), 700);
+    const status = t("{n} loaded", { n: n.toLocaleString() });
+    const more = n ? t("Loading more... {n} so far. Large channels can take a minute.", { n: n.toLocaleString() }) : t("Contacting the site...");
+    if (active) { $("#rStatus").textContent = status; $("#loadingText").textContent = more; }
+    else { b.status = status; b.loadingText = more; }
+    setTimeout(() => pollBrowse(id, key), 700);
   }
 }
 $("#stopLoad").addEventListener("click", () => { if (S.browseId) api(`browse/${S.browseId}/stop`, {}); });
@@ -269,7 +315,7 @@ $("#backBtn").addEventListener("click", () => {
   if (S.browseId && S.loading) api(`browse/${S.browseId}/stop`, {}).catch(() => {});
   S.browseId = null; setLoading(false);
   S.req = snap.req; S.entries = snap.entries; S.byId = new Map(snap.entries.map((e) => [e.id, e]));
-  S.title = snap.title; S.group = snap.group; S.sel.clear(); S.channel = snap.channel || null;
+  S.title = snap.title; S.group = snap.group; S.sel = new Set(); S.channel = snap.channel || null;
   renderChanBar();
   $("#rTitle").textContent = S.title;
   $("#rStatus").textContent = countText(S.entries.length);
@@ -323,7 +369,8 @@ const ICON = {
   check: '<svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>',
 };
 
-const MEDIA_EXT = new Set(["mp3", "m4a", "opus", "ogg", "oga", "flac", "wav", "aac", "mp4", "mkv", "webm", "mov", "m4v"]);
+const MEDIA_EXT = new Set(["mp3", "m4a", "opus", "ogg", "oga", "flac", "wav", "aac", "wma", "ac3", "aiff", "m4b", "amr", "mka",
+  "mp4", "mkv", "webm", "mov", "m4v", "avi", "wmv", "flv", "mpg", "mpeg", "ts", "m2ts", "3gp", "vob", "ogv", "asf"]);
 const fileExt = (p) => (String(p || "").split(/[\\/]/).pop().split(".").pop() || "").toLowerCase();
 function fileCard(e, idx) {
   const sel = S.sel.has(e.id) ? " sel" : "";
@@ -337,6 +384,7 @@ function fileCard(e, idx) {
       <div class="meta"><span>${esc(e.host || "")}</span></div>
       <div class="acts">
         <button class="btn primary" data-act="dl-file"><svg class="ico" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>${esc(t("Download file"))}</button>
+        <button class="btn ghost" data-act="later" title="${esc(t("Schedule download"))}">🕒</button>
         <button class="btn ghost" data-act="copy" title="${esc(t("Copy link"))}">${esc(t("Copy link"))}</button>
       </div></div></div>`;
 }
@@ -364,12 +412,12 @@ function card(e, idx) {
   const live = e.live === "is_live" ? `<span class="live">${esc(t("LIVE"))}</span>` : e.live === "is_upcoming" ? `<span class="live">${esc(t("UPCOMING"))}</span>` : "";
   const chan = e.channel ? (e.channel_url ? `<a href="#" data-act="channel" title="${esc(t("Show all videos by {name}", { name: e.channel }))}">${esc(e.channel)}</a>` : `<span>${esc(e.channel)}</span>`) : "";
   return `<div class="item${sel}${haveCur}" data-id="${esc(e.id)}" data-idx="${idx}">
-    <div class="thumb" data-act="toggle">${img}<span class="tick">${ICON.check}</span>${haveBadge(e)}${e.duration ? `<span class="dur">${fmtDur(e.duration)}</span>` : ""}${live}</div>
+    <div class="thumb" data-act="toggle">${img}<button class="watch" data-act="watch" title="${esc(t("Play in the built-in player"))}"><svg viewBox="0 0 24 24"><path d="M7 4v16l13-8z" fill="currentColor"/></svg></button><span class="tick">${ICON.check}</span>${haveBadge(e)}${e.duration ? `<span class="dur">${fmtDur(e.duration)}</span>` : ""}${live}</div>
     <div class="body"><div class="title" title="${esc(e.title)}">${esc(e.title)}</div>
       <div class="meta">${chan}${e.views ? `<span>${esc(t("{n} views", { n: fmtNum(e.views) }))}</span>` : ""}${e.date ? `<span>${fmtDate(e.date)}</span>` : ""}</div>
       <div class="acts">
         ${dlButton(e, "video")}${dlButton(e, "audio")}
-        ${hasIt(e) ? `<button class="btn ghost" data-act="playit" title="${esc(t("Play in the built-in player"))}">▶</button>` : ""}
+        <button class="btn ghost" data-act="listen" title="${esc(t("Listen (sound only, uses less data)"))}">🎧</button>
         ${hasIt(e) ? `<button class="btn ghost trash" data-act="del" title="${esc(t("Delete the downloaded file (moves it to the Recycle Bin)"))}">✕</button>` : ""}
         <button class="btn ghost" data-act="quality" title="${esc(t("See every available quality"))}">${ICON.q}</button>
         <button class="btn ghost" data-act="open" title="${esc(t("Open on the website"))}">${ICON.ext}</button>
@@ -401,9 +449,7 @@ function updateMarks() {
     const tr = el.querySelector("[data-act=del]");
     if (hasIt(e) && !tr) el.querySelector(".acts [data-act=quality]").insertAdjacentHTML("beforebegin", `<button class="btn ghost trash" data-act="del" title="${esc(t("Delete the downloaded file (moves it to the Recycle Bin)"))}">✕</button>`);
     if (!hasIt(e) && tr) tr.remove();
-    const pb = el.querySelector("[data-act=playit]");
-    if (hasIt(e) && !pb) el.querySelector(".acts [data-act=del]").insertAdjacentHTML("beforebegin", `<button class="btn ghost" data-act="playit" title="${esc(t("Play in the built-in player"))}">▶</button>`);
-    if (!hasIt(e) && pb) pb.remove();
+
   });
   renderChanBar();
   updateSelInfo();
@@ -471,10 +517,18 @@ $("#delSel").addEventListener("click", () => {
 $("#clearResults").addEventListener("click", () => {
   if (S.browseId && S.loading) api(`browse/${S.browseId}/stop`, {}).catch(() => {});
   S.browseId = null; setLoading(false);
-  S.req = null; S.entries = []; S.byId.clear(); S.sel.clear(); S.shown = []; S.history = []; S.channel = null;
+  S.req = null; S.entries = []; S.byId = new Map(); S.sel = new Set(); S.shown = []; S.history = []; S.channel = null; S.renderedCount = 0;
+  $("#q").value = ""; S.tabs[S.kind] = freshTab();
   $("#results").innerHTML = ""; $("#resultsHead").classList.add("hidden"); $("#hero").classList.remove("hidden");
   renderChanBar(); updateSelInfo();
 });
+function playShown(audio) {
+  const list = S.shown.filter((x) => x.kind === "video" && x.live !== "is_upcoming");
+  if (!list.length) return toast(t("Nothing to play here."), "bad");
+  Player.playRemote(list.slice(0, 300), 0, audio);
+}
+$("#playAll").addEventListener("click", () => playShown(false));
+$("#listenAll").addEventListener("click", () => playShown(true));
 $("#selAll").addEventListener("click", () => { selectable().forEach((e) => S.sel.add(e.id)); refreshSelClasses(); });
 $("#selNew").addEventListener("click", () => {
   S.sel.clear();
@@ -507,10 +561,16 @@ $("#results").addEventListener("click", (ev) => {
       if (!confirmInline(t("Already downloaded. Click again to download it again."))) return;
       enqueue([e], { mode }, null, true);
     } else enqueue([e], { mode });
-  } else if (act === "playit") {
-    Player.playVideo(e.vid, curMode());
+  } else if (act === "watch" || act === "listen") {
+    const audio = act === "listen";
+    if (e.dl && e.dl[audio ? "audio" : "video"]) return Player.playVideo(e.vid, audio ? "audio" : "video");
+    // not downloaded: stream it (the rest of the shown videos follow in Up next)
+    const list = S.shown.filter((x) => x.kind === "video" && x.live !== "is_upcoming");
+    Player.playRemote(list, Math.max(0, list.indexOf(e)), audio);
   } else if (act === "dl-file") {
     enqueue([e]);
+  } else if (act === "later") {
+    openSchedule(e.title, (ts) => enqueue([e], {}, null, false, null, ts));
   } else if (act === "copy") {
     navigator.clipboard.writeText(e.url).then(() => toast(t("Link copied"), "ok"));
   } else if (act === "del") {
@@ -527,6 +587,49 @@ $("#results").addEventListener("click", (ev) => {
   } else if (act === "openpl") {
     startBrowse({ kind: "url", query: e.url }, true);
   }
+});
+
+/* ---------------------------------------------------------------- scheduling */
+function fmtWhen(ts) {
+  try {
+    return new Intl.DateTimeFormat(I18N.lang, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(ts * 1000));
+  } catch { return new Date(ts * 1000).toLocaleString(); }
+}
+function toLocalInput(d) { const p = (n) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; }
+function presetTime(k) {
+  const d = new Date();
+  if (k === "1h") d.setHours(d.getHours() + 1);
+  else if (k === "tonight") { d.setDate(d.getDate() + 1); d.setHours(0, 0, 0, 0); }
+  else if (k === "night") { if (d.getHours() >= 2) d.setDate(d.getDate() + 1); d.setHours(2, 0, 0, 0); }
+  else if (k === "morning") { d.setDate(d.getDate() + 1); d.setHours(6, 0, 0, 0); }
+  else if (k === "weekend") { const add = (6 - d.getDay() + 7) % 7 || 7; d.setDate(d.getDate() + add); d.setHours(8, 0, 0, 0); }
+  return d;
+}
+let schedCb = null;
+function openSchedule(what, cb) {
+  schedCb = cb;
+  $("#schedWhat").textContent = what;
+  const s = S.lastSched ? new Date(S.lastSched * 1000) : presetTime("tonight");
+  $("#schedAt").value = toLocalInput(s < new Date() ? presetTime("tonight") : s);
+  $("#schedAt").min = toLocalInput(new Date());
+  $("#schedModal").classList.remove("hidden");
+}
+$("#schedModal").addEventListener("click", async (ev) => {
+  if (ev.target.id === "schedModal" || ev.target.closest("[data-close]")) { $("#schedModal").classList.add("hidden"); return; }
+  const p = ev.target.closest("[data-sp]"); if (p) { $("#schedAt").value = toLocalInput(presetTime(p.dataset.sp)); return; }
+  if (ev.target.closest("#schedOk")) {
+    const ts = new Date($("#schedAt").value).getTime() / 1000;
+    if (!ts || ts < Date.now() / 1000 + 30) { toast(t("Choose a time in the future."), "bad"); return; }
+    S.lastSched = ts;
+    $("#schedModal").classList.add("hidden");
+    if (schedCb) await schedCb(ts);
+  }
+});
+$("#schedBtn").addEventListener("click", () => {
+  const picked = S.entries.filter((e) => S.sel.has(e.id));
+  const list = picked.length ? picked : selectable().filter((e) => e.kind === "file" || (!hasIt(e) && e.live !== "is_upcoming"));
+  if (!list.length) return toast(t("Select something to schedule first."), "bad");
+  openSchedule(t("{n} items", { n: list.length }), async (ts) => { await enqueue(list, {}, null, false, null, ts); S.sel.clear(); refreshSelClasses(); });
 });
 
 /* ---------------------------------------------------------------- channel bar ("download new only") */
@@ -550,6 +653,11 @@ function renderChanBar() {
   b.disabled = !fresh.length || S.loading;
   b.textContent = fresh.length ? t("Download new ({n})", { n: fresh.length.toLocaleString() }) : (S.loading ? t("Loading...") : t("Up to date"));
 }
+$("#cbLater") && $("#cbLater").addEventListener("click", () => {
+  const fresh = channelNew().slice().reverse();
+  if (!fresh.length) return toast(t("Up to date"));
+  openSchedule(`${S.channel ? S.channel.name + " · " : ""}${t("{n} new", { n: fresh.length })}`, (ts) => enqueue(fresh, {}, null, false, null, ts));
+});
 $("#cbNew").addEventListener("click", () => {
   const fresh = channelNew().slice().reverse();   // oldest first
   if (fresh.length > 25 && !confirmInline(t("Download all {n} shown items?", { n: fresh.length }))) return;
@@ -604,7 +712,7 @@ function barOptions(over = {}) {
   return Object.assign({ mode: s.mode, video_quality: s.video_quality, video_container: s.video_container,
     audio_format: s.audio_format, audio_quality: s.audio_quality }, over);
 }
-async function enqueue(entries, over = {}, formatId, force = false, section = null) {
+async function enqueue(entries, over = {}, formatId, force = false, section = null, scheduleAt = null) {
   const items = entries.filter((e) => e.kind === "video" || e.kind === "file").map((e) => (e.kind === "file" ?
     { kind: "file", url: e.url, title: e.title, host: e.host, referrer: S.req && S.req.query } : {
     url: e.url, title: e.title, thumb: e.thumb, channel: e.channel, duration: e.duration, format_id: formatId || null,
@@ -612,13 +720,15 @@ async function enqueue(entries, over = {}, formatId, force = false, section = nu
   }));
   if (!items.length) return;
   try {
-    const r = await api("download", { items, options: barOptions(over), group: S.group || S.title, force: force || !!formatId });
+    const r = await api("download", { items, options: barOptions(over), group: S.group || S.title, force: force || !!formatId,
+      schedule_at: scheduleAt || undefined });
     const audio = (over.mode || S.settings.mode) === "audio";
     const parts = [];
     const onlyFiles = items.every((x) => x.kind === "file");
     if (r.added) parts.push(onlyFiles ? `${t("Added to downloads")} (${r.added})` : t(audio ? "Added {n} audio downloads" : "Added {n} video downloads", { n: r.added }));
     if (r.already) parts.push(t("{n} already downloaded (skipped)", { n: r.already }));
     if (r.queued) parts.push(t("({n} already in the list)", { n: r.queued }));
+    if (scheduleAt && r.added) parts.push(t("Starts {when}", { when: fmtWhen(scheduleAt) }));
     const msg = parts.join(" · ") || t("Already in the download list");
     toast(msg, r.added ? "ok" : "");
     pollJobs();
@@ -717,7 +827,7 @@ $("#fmtModal").addEventListener("click", (ev) => {
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") { $("#fmtModal").classList.add("hidden"); $("#filesModal").classList.add("hidden"); } });
 
 /* ---------------------------------------------------------------- downloads view */
-const STATUS_LABEL = { queued: "Waiting", running: "Downloading", done: "Done", skipped: "Skipped", error: "Failed", canceled: "Canceled", paused: "Paused" };
+const STATUS_LABEL = { scheduled: "Scheduled", queued: "Waiting", running: "Downloading", done: "Done", skipped: "Skipped", error: "Failed", canceled: "Canceled", paused: "Paused" };
 function jobFmt(j) {
   if (j.kind === "file") return `${t("File")}${j.total ? " · " + fmtBytes(j.total) : ""}`;
   const o = j.opts || {};
@@ -739,8 +849,9 @@ function jobActs(j) {
   const b = (a, label, cls = "btn sm ghost") => `<button class="${cls}" data-jact="${a}">${esc(t(label))}</button>`;
   switch (j.status) {
     case "running": return b("pause", "Pause") + b("cancel", "Cancel");
-    case "queued": return b("top", "Download next") + b("pause", "Pause") + b("cancel", "Remove");
-    case "paused": return b("resume", "Resume", "btn sm") + b("top", "Download next") + b("remove", "Remove");
+    case "queued": return b("top", "Download next") + b("pause", "Pause") + b("resched", "Schedule") + b("cancel", "Remove");
+    case "scheduled": return b("top", "Start now", "btn sm") + b("resched", "Change time") + b("cancel", "Remove");
+    case "paused": return b("resume", "Resume", "btn sm") + b("top", "Download next") + b("resched", "Schedule") + b("remove", "Remove");
     case "error": return b("retry", "Retry", "btn sm") + b("remove", "Remove");
     case "canceled": return b("retry", "Retry", "btn sm") + b("remove", "Remove");
     default: return (j.filepath ? (MEDIA_EXT.has(fileExt(j.filepath)) ? b("listen", "Play", "btn sm") : "") +
@@ -753,7 +864,7 @@ function jobVisible(j) {
   const q = ($("#jobFilter").value || "").trim().toLowerCase();
   const f = $("#jobStatusFilter").value;
   if (q && !((j.title || "") + " " + (j.channel || "") + " " + (j.group || "")).toLowerCase().includes(q)) return false;
-  if (f === "active") return ["running", "queued"].includes(j.status);
+  if (f === "active") return ["running", "queued", "scheduled"].includes(j.status);
   if (f === "done") return ["done", "skipped"].includes(j.status);
   if (f) return j.status === f;
   return true;
@@ -775,7 +886,7 @@ function offerClip(c) {
   el.onclick = async (ev) => {
     const b = ev.target.closest("[data-c]"); if (!b) return;
     const a = b.dataset.c;
-    if (a === "open") { showView("browse"); setKind("url"); $("#q").value = c.url; doSearch(); }
+    if (a === "open") { showView("browse"); setKind(c.kind === "file" ? "software" : "url"); $("#q").value = c.url; doSearch(); }
     else if (a === "file") await api("download", { items: [{ kind: "file", url: c.url, title: c.url.split("/").pop() }] }).then(() => toast(t("Added to downloads"), "ok"));
     else if (a === "audio" || a === "video") await api("download", { items: [{ url: c.url, title: c.url }], options: barOptions({ mode: a }) }).then((r) =>
       toast(r.added ? t("Added to downloads") : r.already ? t("{n} already downloaded (skipped)", { n: 1 }) : t("Already in the download list"), "ok"));
@@ -874,13 +985,13 @@ async function pollJobs() {
   const active = (stats.running || 0) + (stats.queued || 0);
   const badge = $("#dlBadge");
   badge.textContent = active; badge.classList.toggle("hidden", !active);
-  const labels = [["running", "Downloading"], ["queued", "Waiting"], ["paused", "Paused"], ["done", "Done"], ["skipped", "Skipped"], ["error", "Failed"]];
+  const labels = [["running", "Downloading"], ["queued", "Waiting"], ["scheduled", "Scheduled"], ["paused", "Paused"], ["done", "Done"], ["skipped", "Skipped"], ["error", "Failed"]];
   $("#dlStats").innerHTML = labels.filter(([k]) => stats[k]).map(([k, l]) => `<span class="chip">${esc(t(l))}<b>${stats[k]}</b></span>`).join("") || `<span class="chip">${esc(t("Queue is empty"))}</span>`;
   const box = $("#jobs");
   $("#jobsEmpty").classList.toggle("hidden", jobs.length > 0);
   const existing = new Map($$(".job", box).map((el) => [el.dataset.id, el]));
   // newest first, but keep running at top
-  const order = { running: 0, queued: 1, paused: 2, error: 3, canceled: 4, done: 5, skipped: 5 };
+  const order = { running: 0, queued: 1, scheduled: 2, paused: 3, error: 4, canceled: 5, done: 6, skipped: 6 };
   jobs.sort((a, b) => (order[a.status] - order[b.status]) ||
     (a.status === "queued" ? (a.position || 1e9) - (b.position || 1e9) : (b.finished || b.created) - (a.finished || a.created)));
   renderChannelStrip(jobs);
@@ -897,6 +1008,7 @@ async function pollJobs() {
     el.querySelector(".tag").textContent = jobFmt(j);
     const st = el.querySelector(".st"); st.className = "st " + j.status; st.textContent = t(STATUS_LABEL[j.status] || j.status);
     let info = j.stage ? t(j.stage) : "";
+    if (j.status === "scheduled" && j.scheduled_at) info = t("Starts {when}", { when: fmtWhen(j.scheduled_at) });
     if (j.status === "queued" && j.position && !j.retry_at && j.stage !== "Waiting for internet connection...") info = t("Number {n} in line", { n: j.position }) + (info ? " · " + info : "");
     if (j.status === "running" && j.total) {
       info = `${info} · ${t("{p}% of {size}", { p: Math.round(j.percent), size: fmtBytes(j.total) })}${j.speed ? " · " + fmtBytes(j.speed) + "/s" : ""}${j.eta != null ? " · " + t("{t} left", { t: fmtDur(j.eta) }) : ""}`;
@@ -923,6 +1035,9 @@ $("#jobs").addEventListener("click", async (ev) => {
   const b = ev.target.closest("[data-jact]"); if (!b) return;
   const row = b.closest(".job"); const j = row._job; const a = b.dataset.jact;
   if (a === "play") return api("open", { path: j.filepath });
+  if (a === "resched") {
+    return openSchedule(j.title, async (ts) => { await api("jobs/action", { ids: [j.id], action: "schedule", at: ts }); toast(t("Starts {when}", { when: fmtWhen(ts) }), "ok"); pollJobs(); });
+  }
   if (a === "listen") {
     const list = $$("#jobs .job").filter((r) => !r.classList.contains("hidden") && r._job.filepath && MEDIA_EXT.has(fileExt(r._job.filepath))
       && ["done", "skipped"].includes(r._job.status)).map((r) => r._job.filepath);
@@ -1142,7 +1257,7 @@ $("#libChannels").addEventListener("click", async (ev) => {
   const a = el.dataset.lact;
   if (a === "open") return api("open", { path: c.folder });
   if (a === "check" || a === "sync") { await api("library/sync", { keys: [key], download: a === "sync" }); return loadLibrary(); }
-  if (a === "view") { showView("browse"); startBrowse({ kind: "url", query: c.url, tabs: ["videos", "streams"] }, true); return; }
+  if (a === "view") { showView("browse"); setKind("url", false); $("#q").value = c.url; startBrowse({ kind: "url", query: c.url, tabs: ["videos", "streams"] }, true); return; }
   if (a === "folder") {
     toast(t("A folder picker opened. It may be behind this window."));
     const r = await api("library/channel/folder", { key });

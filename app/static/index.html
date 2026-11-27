@@ -120,6 +120,8 @@
         <option value="az">Title A to Z</option>
       </select>
       <label class="chk small"><input type="checkbox" id="hideHave"> Hide downloaded</label>
+      <button id="playAll" class="btn sm" title="Watch all shown videos in the built-in player, without downloading">▶ Play all</button>
+      <button id="listenAll" class="btn sm" title="Listen to all shown videos (sound only, uses less data), without downloading">🎧 Listen to all</button>
       <button id="selNew" class="btn sm">Select new only</button>
       <button id="selAll" class="btn sm">Select all shown</button>
       <button id="selNone" class="btn ghost sm">Clear</button>
@@ -140,6 +142,7 @@
       <div class="cbfolder muted small" id="cbFolder" data-no-i18n></div>
     </div>
     <label class="toggle" title="New videos from this channel are downloaded automatically into its folder."><input type="checkbox" id="cbTrack"><span></span> Keep up to date</label>
+    <button class="btn" id="cbLater" title="Schedule download">🕒</button>
     <button class="btn primary" id="cbNew" data-no-i18n></button>
   </div>
 
@@ -188,7 +191,7 @@
     </div>
     <select id="jobStatusFilter" title="Show">
       <option value="">All</option><option value="active">In progress and waiting</option>
-      <option value="done">Done</option><option value="error">Failed</option><option value="paused">Paused</option>
+      <option value="scheduled">Scheduled</option><option value="done">Done</option><option value="error">Failed</option><option value="paused">Paused</option>
     </select>
     <label class="field inline-field">When all downloads finish
       <select data-set="after_done">
@@ -250,6 +253,7 @@
         <video id="plVideo" playsinline preload="metadata"></video>
         <img id="plCover" class="pl-cover hidden" alt="" referrerpolicy="no-referrer">
         <div id="plArt" class="pl-art hidden">♪</div>
+        <div id="plLoading" class="pl-loading hidden"><span class="spin big"></span><span>Preparing...</span></div>
         <div id="plEmpty" class="pl-empty">
           <div class="pl-bigicon">▶</div>
           <h3>Your downloads, ready to play</h3>
@@ -289,6 +293,7 @@
           </select>
         </label>
         <span class="muted small" id="plSleepLeft" data-no-i18n></span>
+        <button class="btn sm primary hidden" id="plDownload" title="Download what you are watching or listening to">Download this</button>
         <span class="muted small pl-keys">Keys: Space play/pause · ← → 10 s · Shift+← → previous/next · M mute · F full screen</span>
       </div>
     </div>
@@ -453,6 +458,11 @@
       <label class="field">Language
         <select class="langsel" id="langSet" data-no-i18n></select>
       </label>
+      <label class="field">Quality when playing online videos in the player
+        <select data-set="stream_quality" data-num>
+          <option value="360">360p (uses least data)</option><option value="480">480p</option><option value="720">720p (recommended)</option><option value="1080">1080p</option>
+        </select>
+      </label>
       <label class="toggle"><input type="checkbox" data-set="watch_clipboard"><span></span> Offer to download links I copy (videos, software, files)</label>
       <label class="toggle"><input type="checkbox" data-set="notify_done"><span></span> Show a notification when downloads finish</label>
       <label class="field">Theme
@@ -534,6 +544,7 @@
   </div>
   <div class="selinfo" id="selInfo">Nothing selected</div>
   <div class="actions">
+    <button class="btn" id="schedBtn" title="Choose a date and time to download the selected items (or all shown items)">🕒 Schedule</button>
     <button class="btn" id="dlShown">Download all shown</button>
     <button class="btn primary" id="dlSel" disabled>Download selected</button>
   </div>
@@ -579,6 +590,23 @@
   </div>
 </div>
 
+<div class="modal hidden" id="schedModal">
+  <div class="modal-card sched-card">
+    <button class="btn ghost icon close" data-close title="Close"><svg class="ico" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+    <h3>Schedule download</h3>
+    <p class="muted small" id="schedWhat" data-no-i18n></p>
+    <div class="chips sched-presets">
+      <button class="chip pick" data-sp="1h">In 1 hour</button>
+      <button class="chip pick" data-sp="tonight">Tonight at midnight</button>
+      <button class="chip pick" data-sp="night">Tonight at 2:00</button>
+      <button class="chip pick" data-sp="morning">Tomorrow at 6:00</button>
+      <button class="chip pick" data-sp="weekend">Saturday at 8:00</button>
+    </div>
+    <label class="field">Date and time <input type="datetime-local" id="schedAt"></label>
+    <p class="note">The app has to be running at that time (it can stay in the tray). Scheduled items wait in Downloads, where you can start them now or change the time.</p>
+    <div class="inline"><button class="btn primary" id="schedOk">Schedule</button><button class="btn ghost" data-close>Cancel</button></div>
+  </div>
+</div>
 <div class="modal hidden" id="filesModal">
   <div class="modal-card">
     <button class="btn ghost icon close" data-close title="Close"><svg class="ico" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>

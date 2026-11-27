@@ -10,7 +10,9 @@ Public videos never need a sign-in, so keep **Settings > Sign-in** set to **Off*
 - If a sign-in can't be read, downloads **continue without it** and a banner explains what happened. Downloads no longer fail because of this.
 
 ## Built-in player
-Open the **Player** tab to watch and listen to everything you have downloaded.
+Open the **Player** tab to watch and listen to everything you have downloaded, and to stream videos from your searches without downloading them.
+- **Every format plays.** Files the browser can't play directly (HEVC/H.265, MKV, AVI, WMV, FLV, MPEG, AC3, DTS, WMA…) are converted on the fly while they play. Seeking still works.
+- **Play search results without downloading.** In Browse, hover a video and press ▶ to watch it, or 🎧 to listen to the sound only (uses less data). Use **▶ Play all** or **🎧 Listen to all** for everything shown. Streaming quality is in Settings > App, and **Download this** in the player downloads what you're watching.
 - **All media** lists your audio and video. Search it, filter by channel or type, then click a file or **Play all**. **Up next** is your play queue; use ＋ to add an item to play next.
 - It **continues where you stopped** in every file, and shows how much of each you have played.
 - **Speed** from 0.75× to 2×, **sleep timer** (15–60 minutes, or at the end of an item), **shuffle**, **repeat** (all or one), **full screen** and **picture-in-picture** for video.
@@ -34,6 +36,16 @@ Open the **Player** tab to watch and listen to everything you have downloaded.
 - Deleted files go to the **Recycle Bin**, so you can get them back. Only files that Rit Downloader downloaded can be deleted.
 - **Clear results** in Browse. Duplicate copies found by the library can be deleted with one click.
 - **Optional:** turn on Settings > "Offer to download links I copy". When you copy a video or download link anywhere, the app offers to download it.
+
+## Schedule downloads
+- In Browse, select videos or files and click **🕒 Schedule**. With nothing selected, it schedules everything new that's shown. Each software file card and a channel's "new videos" bar also has a 🕒 button.
+- Pick a time, or use **In 1 hour**, **Tonight at midnight**, **Tonight at 2:00**, **Tomorrow at 6:00** or **Saturday at 8:00**.
+- Scheduled items wait in Downloads with their start time. Use **Start now**, **Change time** or **Remove**. Any waiting or paused item can be scheduled too.
+- The app has to be running at that time. It can stay in the tray, and you can turn on "Start automatically when I sign in" in the installer.
+- Settings > Speed also has **download hours**, which limits all downloads to a daily time window.
+
+## Each Browse tab keeps its own search
+Videos, Channels & people, Playlists, Paste a link and Software & files each remember their own search text, results, filters and Back history. A link pasted in Software & files never appears in the other tabs.
 
 ## The download list
 - **What you ask for last downloads first.** A new request goes to the front of the queue, and older unfinished items wait behind it. Every waiting item shows its place ("Number 3 in line").

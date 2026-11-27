@@ -274,7 +274,7 @@ def formats():
 def download():
     d = request.get_json() or {}
     items = d.get("items") or ([{"url": d["url"], "title": d.get("title", "")}] if d.get("url") else [])
-    r = E.manager.add(items, d.get("options"), d.get("group"), force=bool(d.get("force")))
+    r = E.manager.add(items, d.get("options"), d.get("group"), force=bool(d.get("force")), schedule_at=d.get("schedule_at"))
     return jsonify(**r, skipped=r["already"] + r["queued"])
 
 
@@ -391,6 +391,72 @@ def media():
     return send_file(path, conditional=True)
 
 
+# ---- player: play every format, and stream online videos without downloading -------------
+import streamer  # noqa: E402
+from flask import Response, stream_with_context  # noqa: E402
+
+
+@app.get("/api/play/info")
+def play_info():
+    path = request.args.get("path", "")
+    if not E.is_known_path(path) or not os.path.isfile(path):
+        abort(404)
+    return jsonify(streamer.plan_local(path))
+
+
+@app.get("/api/play/stream")
+def play_stream():
+    path = request.args.get("path", "")
+    if not E.is_known_path(path) or not os.path.isfile(path):
+        abort(404)
+    p = streamer.plan_local(path)
+    if p["mode"] == "direct":
+        return send_file(path, conditional=True)
+    cmd, mime = streamer.local_cmd(path, p, float(request.args.get("t") or 0))
+    return Response(stream_with_context(streamer.run_pipe(cmd)), mimetype=mime, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/stream/open")
+def stream_open():
+    d = request.get_json() or {}
+    s = E.settings.get()
+    opts = E.ydl_opts_from_args(E.base_args(s) + ["--no-playlist"])
+    opts["logger"] = E._QuietLogger()
+    try:
+        sess = streamer.open_remote(d.get("url"), opts, int(s.get("stream_quality") or 720), bool(d.get("audio")))
+    except Exception as ex:
+        return jsonify(error=E.clean_error(ex)), 400
+    return jsonify({k: sess.get(k) for k in ("id", "kind", "type", "duration", "title", "thumb", "channel", "vid", "height")})
+
+
+@app.get("/api/stream/<sid>")
+def stream_play(sid):
+    sess = streamer.sessions.get(sid)
+    if not sess:
+        abort(404)
+    if sess["kind"] == "proxy":
+        import requests as rq
+        h = dict(sess.get("headers") or {})
+        if request.headers.get("Range"):
+            h["Range"] = request.headers["Range"]
+        up = rq.get(sess["src"], headers=h, stream=True, timeout=30)
+        out = {"Accept-Ranges": "bytes", "Cache-Control": "no-store",
+               "Content-Type": up.headers.get("Content-Type") or sess.get("mime") or "application/octet-stream"}
+        for k in ("Content-Length", "Content-Range"):
+            if up.headers.get(k):
+                out[k] = up.headers[k]
+
+        def gen():
+            try:
+                for chunk in up.iter_content(64 * 1024):
+                    yield chunk
+            finally:
+                up.close()
+        return Response(stream_with_context(gen()), status=up.status_code, headers=out)
+    cmd = streamer.remote_cmd(sess, float(request.args.get("t") or 0))
+    return Response(stream_with_context(streamer.run_pipe(cmd)), mimetype="video/mp4", headers={"Cache-Control": "no-store"})
+
+
 @app.get("/api/player/items")
 def player_items():
     return jsonify(items=E.player_items())
@@ -405,7 +471,7 @@ def clip_dismiss():
 @app.post("/api/jobs/action")
 def jobs_action():
     d = request.get_json() or {}
-    E.manager.action(d.get("ids", []), d.get("action"))
+    E.manager.action(d.get("ids", []), d.get("action"), d.get("at"))
     return jsonify(ok=True)
 
 
