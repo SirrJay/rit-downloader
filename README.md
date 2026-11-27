@@ -9,9 +9,20 @@ Public videos never need a sign-in, so keep **Settings > Sign-in** set to **Off*
 - Click **Test sign-in** to check the source right away.
 - If a sign-in can't be read, downloads **continue without it** and a banner explains what happened. Downloads no longer fail because of this.
 
+## Built-in player
+Open the **Player** tab to watch and listen to everything you have downloaded.
+- **All media** lists your audio and video. Search it, filter by channel or type, then click a file or **Play all**. **Up next** is your play queue; use ＋ to add an item to play next.
+- It **continues where you stopped** in every file, and shows how much of each you have played.
+- **Speed** from 0.75× to 2×, **sleep timer** (15–60 minutes, or at the end of an item), **shuffle**, **repeat** (all or one), **full screen** and **picture-in-picture** for video.
+- A **mini-player** at the bottom keeps playing while you search, download or browse your library.
+- **Keys:** Space play/pause, ← → 10 seconds, Shift+← → previous/next, M mute, F full screen. Keyboard media keys work too.
+- **Play** buttons appear in Downloads, in Library (per channel, and in each channel's Files window) and on downloaded videos in Browse.
+
 ## Software and any file
-- In **Browse > Paste a link**, paste a direct download link (.exe, .msi, .zip, .7z, .dmg, .pkg, .apk, .iso, .pdf…) to download that file.
-- Or paste a program's **download page** (for example the VLC or 7-Zip download page). Rit Downloader lists every downloadable file on the page, labelled with its type (EXE, MSI, ZIP…).
+- Choose **Browse > Software & files**, or try one of the example programs shown there (VLC, 7-Zip, LibreOffice, OBS Studio, Audacity, GIMP, Python…). Then paste a direct download link (.exe, .msi, .zip, .7z, .dmg, .pkg, .apk, .iso, .pdf…) to download that file.
+- Or paste a program's **download page** from any website. Rit Downloader lists every downloadable file on the page, labelled with its type (EXE, MSI, ZIP…). If a page only links to another page that holds the files, the app follows it.
+- **GitHub projects:** paste any github.com project link to get the files of its latest release.
+- A few websites block automatic downloads. For those, right-click the download button in your browser, choose "Copy link", and paste that link.
 - Files download with **several connections at once** (Settings > Speed) and can be **paused and resumed**, even after a restart.
 - Each finished file shows its **SHA-256** checksum. Click it to copy, then compare it with the checksum on the website to make sure the file is genuine.
 - Programs are labelled **Program** and are never run automatically. On Windows they keep the "downloaded from the internet" mark, so SmartScreen still checks them.

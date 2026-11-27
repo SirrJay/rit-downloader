@@ -737,6 +737,8 @@ ERROR_RULES = [
     ("unavailable", ("video unavailable", "has been removed", "not available", "does not exist", "account associated"),
      "This video is unavailable or was removed."),
     ("disk", ("no space left", "errno 28", "disk full", "not enough space"), "The disk is full."),
+    ("blocked", ("403 client error", "forbidden for url", "http error 403"),
+     "This website blocks automatic downloads. Open it in your browser, right-click the download button, choose Copy link, and paste that link here."),
     ("unsupported", ("unsupported url", "no video formats found", "no video could be found"),
      "No videos or downloadable files were found at this link."),
     ("ffmpeg", ("ffmpeg not found", "ffprobe not found", "ffmpeg is not installed"),
@@ -2003,3 +2005,47 @@ def _clipboard_loop():
 
 
 threading.Thread(target=_clipboard_loop, daemon=True).start()
+
+
+
+# --------------------------------------------------------------------------- built-in player: everything playable
+PLAYABLE_AUDIO = {"mp3", "m4a", "opus", "ogg", "oga", "flac", "wav", "aac"}
+PLAYABLE_VIDEO = {"mp4", "webm", "mkv", "mov", "m4v"}
+
+
+def player_items():
+    """All downloaded audio/video files that still exist, newest first."""
+    items, seen = [], set()
+    with library._lock:
+        rows = library._db().execute("""SELECT d.video_id, d.mode, d.filepath, d.title, d.channel_id, d.size, d.upload_date,
+                                               d.created, COALESCE(c.name, d.channel) AS channel
+                                        FROM downloads d LEFT JOIN channels c ON c.channel_id = d.channel_id
+                                        WHERE d.filepath IS NOT NULL""").fetchall()
+    for r in rows:
+        fp = r["filepath"]
+        ext = fp.rsplit(".", 1)[-1].lower() if "." in fp else ""
+        if ext not in PLAYABLE_AUDIO | PLAYABLE_VIDEO or not os.path.isfile(fp):
+            continue
+        key = os.path.normcase(os.path.abspath(fp))
+        seen.add(key)
+        vid = r["video_id"] or ""
+        items.append({"path": fp, "title": r["title"] or os.path.basename(fp), "channel": r["channel"] or "",
+                      "channel_id": r["channel_id"], "vid": vid, "type": "audio" if ext in PLAYABLE_AUDIO else "video",
+                      "date": r["upload_date"], "size": r["size"], "added": r["created"],
+                      "thumb": f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg" if len(vid) == 11 else ""})
+    for j in manager.list():                       # clips, files and anything not in the library
+        fp = j.get("filepath")
+        if not fp or j.get("status") not in ("done", "skipped"):
+            continue
+        ext = fp.rsplit(".", 1)[-1].lower() if "." in fp else ""
+        key = os.path.normcase(os.path.abspath(fp))
+        if ext not in PLAYABLE_AUDIO | PLAYABLE_VIDEO or key in seen or not os.path.isfile(fp):
+            continue
+        seen.add(key)
+        vid = j.get("vid") or ""
+        items.append({"path": fp, "title": j.get("title") or os.path.basename(fp), "channel": j.get("channel") or "",
+                      "channel_id": j.get("channel_id"), "vid": vid, "type": "audio" if ext in PLAYABLE_AUDIO else "video",
+                      "date": None, "size": os.path.getsize(fp), "added": j.get("finished") or j.get("created"),
+                      "thumb": j.get("thumb") or (f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg" if len(vid) == 11 else "")})
+    items.sort(key=lambda x: x.get("added") or 0, reverse=True)
+    return items

@@ -85,6 +85,9 @@ def js_keys():
     m = re.search(r"const labels = \[(.*?)\];", src, re.S)
     keys += re.findall(r'\["\w+", "([^"]+)"\]', m.group(1))
     keys += re.findall(r'b\("\w+", "([^"]+)"', src)
+    # the built-in player has its own script
+    psrc = open(os.path.join(STATIC, "player.js"), encoding="utf-8").read()
+    keys += re.findall(r'\bt\(\s*"((?:[^"\\]|\\.)*)"', psrc)
     return keys
 
 

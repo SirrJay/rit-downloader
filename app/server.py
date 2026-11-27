@@ -391,6 +391,11 @@ def media():
     return send_file(path, conditional=True)
 
 
+@app.get("/api/player/items")
+def player_items():
+    return jsonify(items=E.player_items())
+
+
 @app.post("/api/clip/dismiss")
 def clip_dismiss():
     E.clip_state.update({"url": None})

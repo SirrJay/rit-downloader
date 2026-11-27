@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rit Downloader: save sermons, music and videos in bulk</title>
+<title>Rit Downloader: videos, music and software downloader with a built-in player</title>
 <meta name="description" content="Free app for Windows and Mac. Search for a preacher or channel, load every video, and download them all as video or MP3 in the quality you choose.">
 <link rel="icon" href="icon.png">
 <style>
@@ -39,6 +39,13 @@
   details { background:var(--s); border:1px solid var(--b); border-radius:12px; padding:14px 18px; margin-bottom:10px; }
   summary { cursor:pointer; font-weight:600; }
   details p { color:var(--m); margin:10px 0 0; font-size:15px; }
+  .spot { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:60px 0 0; }
+  .spotcard { background:linear-gradient(160deg, rgba(124,108,255,.16), var(--s) 60%); border:1px solid var(--b); border-radius:16px; padding:24px; }
+  .spotcard h2 { font-size:22px; margin:0 0 10px; }
+  .spotcard p { color:var(--m); margin:0 0 12px; }
+  .spotcard ul { margin:0; padding-left:18px; color:var(--t); font-size:15px; }
+  .spotcard li { margin:4px 0; }
+  @media (max-width: 760px) { .spot { grid-template-columns:1fr; } }
   footer { color:var(--m); font-size:13px; padding:40px 0 60px; border-top:1px solid var(--b); margin-top:60px; }
 </style>
 </head>
@@ -47,8 +54,8 @@
   <header><img src="icon.png" alt=""> Rit <b>Downloader</b></header>
 
   <section class="hero">
-    <h1>Every sermon. Every song.<br>Saved in one click.</h1>
-    <p class="lead">Search for a preacher, a ministry or a channel. Load everything they have published, then download it all as video or MP3, in the quality you choose. Free for Windows and Mac.</p>
+    <h1>Videos, music and software.<br>Saved in one click.</h1>
+    <p class="lead">Download every sermon from a channel as video or MP3, in the quality you choose. Download software and files from any website. Watch and listen in the built-in player. Free for Windows and Mac.</p>
     <div class="cta">
       <a class="btn" id="mainBtn" href="#downloads">
         <svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
@@ -59,14 +66,26 @@
     <div class="shot"><img src="screenshot.png" alt="Rit Downloader showing a channel's sermons ready to download" onerror="this.parentNode.remove()"></div>
   </section>
 
+  <section class="spot">
+    <div class="spotcard">
+      <h2>Download software from any website</h2>
+      <p>Paste a program's download link or its download page, for example VLC, 7-Zip, LibreOffice, OBS Studio, Audacity, GIMP or Python. Rit Downloader lists every installer and file on the page (.exe, .msi, .zip, .dmg, .apk, .iso…). GitHub projects work too.</p>
+      <ul><li>Several connections at once for speed</li><li>Pause and resume, even after a restart</li><li>A SHA-256 checksum to confirm the file is genuine</li><li>Programs are never run automatically, and Windows SmartScreen still checks them</li></ul>
+    </div>
+    <div class="spotcard">
+      <h2>A built-in player</h2>
+      <p>Watch and listen to everything you download, right inside the app. A mini-player keeps playing while you search and download.</p>
+      <ul><li>Continues where you stopped</li><li>Speed from 0.75× to 2×, ideal for sermons</li><li>Sleep timer, shuffle, repeat and a play queue</li><li>Full screen, picture-in-picture, keyboard and media keys</li></ul>
+    </div>
+  </section>
+
   <section class="grid">
     <div class="card"><h3>Whole channels at once</h3><p>Load every video and live service from a channel, then filter by title or length and sort by date.</p></div>
     <div class="card"><h3>Video or audio</h3><p>MP4, MKV or WebM from 4K down to 144p. MP3, M4A, FLAC or WAV from 320 down to 64 kbps.</p></div>
     <div class="card"><h3>Never a duplicate</h3><p>Everything you already have is marked and skipped. Each channel keeps its own folder, and "Keep up to date" fetches only new sermons.</p></div>
     <div class="card"><h3>13 languages</h3><p>English, French, Spanish, Portuguese, German, Indonesian, Russian, Swahili, Hausa, Yoruba, Arabic, Chinese and Hindi.</p></div>
     <div class="card"><h3>Private by design</h3><p>A password lock keeps others on your computer out. Everything stays on your device.</p></div>
-    <div class="card"><h3>Software too</h3><p>Paste any program's download link or download page. Fast multi-connection downloads that can be paused and resumed, with a SHA-256 check.</p></div>
-    <div class="card"><h3>Play and tidy up</h3><p>A built-in player for your downloads. Delete files to the Recycle Bin from anywhere in the app.</p></div>
+    <div class="card"><h3>Tidy up</h3><p>Delete files to the Recycle Bin from anywhere in the app. Clear lists and remove duplicate copies.</p></div>
     <div class="card"><h3>Many sites</h3><p>YouTube and SoundCloud search, plus links from Facebook, Instagram, TikTok, X and over 1,800 other sites.</p></div>
   </section>
 

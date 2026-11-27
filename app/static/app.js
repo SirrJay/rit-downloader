@@ -139,6 +139,7 @@ function showView(v) {
   if (v === "downloads") pollJobs();
   if (v === "settings") refreshSystem();
   if (v === "library") loadLibrary();
+  if (typeof Player !== "undefined") Player.onView(v);
 }
 $("#tabs").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) showView(b.dataset.view); });
 
@@ -148,25 +149,35 @@ const PLACEHOLDER = {
   channels: "Type a person's or ministry's name, e.g. a pastor or a church",
   playlists: "Search playlists, e.g. a sermon series",
   url: "Paste a link to a channel, playlist or video from YouTube, Facebook, TikTok...",
+  software: "Paste a software download link or a program's download page (any website)",
 };
 function setKind(k, focus = true) {
   S.kind = k;
   $$("#kindSeg button").forEach((b) => b.classList.toggle("on", b.dataset.kind === k));
   $("#q").placeholder = t(PLACEHOLDER[k]);
   $("#urlOpts").classList.toggle("hidden", k !== "url");
+  $("#softPicks").classList.toggle("hidden", k !== "software");
   $("#platform").disabled = k !== "search";
   if (k !== "search") $("#platform").value = "youtube";
-  $("#limit").disabled = k === "url";
-  $("#go").textContent = k === "url" ? t("Load") : t("Search");
+  $("#limit").disabled = k === "url" || k === "software";
+  $("#platform").classList.toggle("hidden", k === "url" || k === "software");
+  $("#limit").classList.toggle("hidden", k === "url" || k === "software");
+  $("#go").textContent = k === "url" || k === "software" ? t("Load") : t("Search");
   if (focus) $("#q").focus();
 }
 $("#kindSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) setKind(b.dataset.kind); });
 $("#q").addEventListener("keydown", (e) => { if (e.key === "Enter") doSearch(); });
 $("#q").addEventListener("paste", () => setTimeout(() => {
   const v = $("#q").value.trim();
-  if (/^https?:\/\//i.test(v) && S.kind !== "url") setKind("url");
+  if (/^https?:\/\//i.test(v) && S.kind !== "url" && S.kind !== "software") setKind("url");
 }, 0));
 $("#go").addEventListener("click", doSearch);
+$("#softPicks").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-url]"); if (!b) return;
+  $("#q").value = b.dataset.url; doSearch();
+});
+$("#heroSoft").addEventListener("click", () => { setKind("software"); window.scrollTo(0, 0); });
+$("#heroPlayer").addEventListener("click", () => showView("player"));
 
 function urlTabs() { return $$("#urlOpts input:checked").map((i) => i.value); }
 
@@ -176,6 +187,10 @@ function doSearch() {
   let kind = S.kind;
   if (/^https?:\/\//i.test(q) || /^(www\.)?[\w-]+\.(com|be|tv|net|org)\//i.test(q)) {
     kind = "url"; if (!/^https?:/i.test(q)) q = "https://" + q;
+  }
+  if (kind === "software") {
+    if (!/^https?:\/\//i.test(q)) { toast(t("Paste a link that starts with http:// or https://"), "bad"); return; }
+    kind = "url";
   }
   const req = { kind, query: q, platform: $("#platform").value, limit: +$("#limit").value };
   if (kind === "url") req.tabs = urlTabs().length ? urlTabs() : ["videos"];
@@ -354,6 +369,7 @@ function card(e, idx) {
       <div class="meta">${chan}${e.views ? `<span>${esc(t("{n} views", { n: fmtNum(e.views) }))}</span>` : ""}${e.date ? `<span>${fmtDate(e.date)}</span>` : ""}</div>
       <div class="acts">
         ${dlButton(e, "video")}${dlButton(e, "audio")}
+        ${hasIt(e) ? `<button class="btn ghost" data-act="playit" title="${esc(t("Play in the built-in player"))}">▶</button>` : ""}
         ${hasIt(e) ? `<button class="btn ghost trash" data-act="del" title="${esc(t("Delete the downloaded file (moves it to the Recycle Bin)"))}">✕</button>` : ""}
         <button class="btn ghost" data-act="quality" title="${esc(t("See every available quality"))}">${ICON.q}</button>
         <button class="btn ghost" data-act="open" title="${esc(t("Open on the website"))}">${ICON.ext}</button>
@@ -385,6 +401,9 @@ function updateMarks() {
     const tr = el.querySelector("[data-act=del]");
     if (hasIt(e) && !tr) el.querySelector(".acts [data-act=quality]").insertAdjacentHTML("beforebegin", `<button class="btn ghost trash" data-act="del" title="${esc(t("Delete the downloaded file (moves it to the Recycle Bin)"))}">✕</button>`);
     if (!hasIt(e) && tr) tr.remove();
+    const pb = el.querySelector("[data-act=playit]");
+    if (hasIt(e) && !pb) el.querySelector(".acts [data-act=del]").insertAdjacentHTML("beforebegin", `<button class="btn ghost" data-act="playit" title="${esc(t("Play in the built-in player"))}">▶</button>`);
+    if (!hasIt(e) && pb) pb.remove();
   });
   renderChanBar();
   updateSelInfo();
@@ -488,6 +507,8 @@ $("#results").addEventListener("click", (ev) => {
       if (!confirmInline(t("Already downloaded. Click again to download it again."))) return;
       enqueue([e], { mode }, null, true);
     } else enqueue([e], { mode });
+  } else if (act === "playit") {
+    Player.playVideo(e.vid, curMode());
   } else if (act === "dl-file") {
     enqueue([e]);
   } else if (act === "copy") {
@@ -686,22 +707,14 @@ function clipSection(dur) {
   if (isNaN(from) || isNaN(to) || to <= from) { toast(t("Check the start and end times (for example 0:05:00 to 1:20:00)."), "bad"); return false; }
   return `${hms(from)}-${hms(to)}`;
 }
-function playFile(path, title) {
-  const ext = fileExt(path);
-  const audio = ["mp3", "m4a", "opus", "ogg", "oga", "flac", "wav", "aac"].includes(ext);
-  const src = "/api/media?path=" + encodeURIComponent(path);
-  $("#playerTitle").textContent = title || path.split(/[\\/]/).pop();
-  $("#playerBox").innerHTML = audio ? `<audio controls autoplay src="${src}"></audio>` : `<video controls autoplay src="${src}"></video>`;
-  $("#playerModal").classList.remove("hidden");
-}
-function closePlayer() { $("#playerBox").innerHTML = ""; $("#playerModal").classList.add("hidden"); }
-$("#playerModal").addEventListener("click", (ev) => { if (ev.target.id === "playerModal" || ev.target.closest("[data-close]")) closePlayer(); });
+function playFile(path) { Player.load(true).then(() => Player.play(path)); }
+
 $("#filesModal").addEventListener("click", (ev) => { if (ev.target.id === "filesModal" || ev.target.closest("[data-close]")) $("#filesModal").classList.add("hidden"); });
 
 $("#fmtModal").addEventListener("click", (ev) => {
   if (ev.target.id === "fmtModal" || ev.target.closest("[data-close]")) $("#fmtModal").classList.add("hidden");
 });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") { $("#fmtModal").classList.add("hidden"); $("#filesModal").classList.add("hidden"); closePlayer(); } });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { $("#fmtModal").classList.add("hidden"); $("#filesModal").classList.add("hidden"); } });
 
 /* ---------------------------------------------------------------- downloads view */
 const STATUS_LABEL = { queued: "Waiting", running: "Downloading", done: "Done", skipped: "Skipped", error: "Failed", canceled: "Canceled", paused: "Paused" };
@@ -910,7 +923,12 @@ $("#jobs").addEventListener("click", async (ev) => {
   const b = ev.target.closest("[data-jact]"); if (!b) return;
   const row = b.closest(".job"); const j = row._job; const a = b.dataset.jact;
   if (a === "play") return api("open", { path: j.filepath });
-  if (a === "listen") return playFile(j.filepath, j.title);
+  if (a === "listen") {
+    const list = $$("#jobs .job").filter((r) => !r.classList.contains("hidden") && r._job.filepath && MEDIA_EXT.has(fileExt(r._job.filepath))
+      && ["done", "skipped"].includes(r._job.status)).map((r) => r._job.filepath);
+    await Player.load(true);
+    return Player.play(j.filepath, list);
+  }
   if (a === "delfile") {
     if (!confirmInline(t("Delete this file? It goes to the Recycle Bin."))) return;
     const r = await api("files/delete", { paths: [j.filepath] });
@@ -1001,6 +1019,7 @@ $("#quitBtn").addEventListener("click", async () => {
 
 /* ---------------------------------------------------------------- boot */
 async function boot() {
+  Player.init();
   S.view = localStorage.getItem("rit.view") || "grid";
   $$("#viewSeg button").forEach((x) => x.classList.toggle("on", x.dataset.v === S.view));
   try { S.settings = await api("settings"); } catch (e) { toast(t("Can't reach the app server:") + " " + e.message, "bad"); }
@@ -1091,6 +1110,7 @@ function libRow(c) {
       ${c.tracked ? `<button class="btn sm ghost" data-lact="opts">${esc(t("Use current settings"))}</button>` : ""}
       ${c.tracked ? `<button class="btn sm ghost" data-lact="untrack">${esc(t("Stop tracking"))}</button>` : ""}
       <button class="btn sm ghost" data-lact="files">${esc(t("Files"))}</button>
+      ${(c.n_audio || c.n_video) ? `<button class="btn sm ghost" data-lact="playch">▶ ${esc(t("Play"))}</button>` : ""}
     </div></div>`;
 }
 function renderDupes(list) {
@@ -1131,6 +1151,12 @@ $("#libChannels").addEventListener("click", async (ev) => {
   }
   if (a === "opts") { await api("library/channel", { key, opts: barOptions() }); toast(t("Saved"), "ok"); return loadLibrary(); }
   if (a === "files") return openChannelFiles(c);
+  if (a === "playch") {
+    const { files } = await api("library/files?key=" + encodeURIComponent(c.channel_id));
+    const list = files.filter((f) => f.exists && MEDIA_EXT.has(fileExt(f.filepath))).map((f) => f.filepath);
+    if (!list.length) return toast(t("No audio or video downloaded yet."), "bad");
+    await Player.load(true); return Player.play(list[0], list);
+  }
   if (a === "untrack") { await api("library/remove", { key }); toast(t("Stopped tracking. Files and history are kept."), "ok"); return loadLibrary(); }
 });
 async function openChannelFiles(c) {
@@ -1140,6 +1166,7 @@ async function openChannelFiles(c) {
   const { files } = await api("library/files?key=" + encodeURIComponent(c.channel_id));
   const total = files.reduce((a, f) => a + (f.size || 0), 0);
   body.innerHTML = `<div class="fhead2"><h3>${esc(c.name || "")} · ${esc(t("{n} files", { n: files.length }))} · ${esc(fmtBytes(total) || "0 B")}</h3>
+      <button class="btn sm primary" data-fact="playall">${esc(t("Play all"))}</button>
       <button class="btn sm danger" data-fact="delsel" disabled>${esc(t("Delete selected files"))}</button>
       <button class="btn sm danger" data-fact="delall">${esc(t("Delete all files"))}</button>
       <button class="btn sm ghost" data-fact="forget" title="${esc(t("Forget this channel's download history. Files stay on disk, and the videos can be downloaded again."))}">${esc(t("Remove from library"))}</button></div>
@@ -1154,9 +1181,11 @@ async function openChannelFiles(c) {
   };
   body.onclick = async (ev) => {
     const b = ev.target.closest("button"); if (!b) return;
-    if (b.dataset.fp !== undefined) { const f = files[+b.dataset.fp]; return playFile(f.filepath, f.title); }
+    const playable = files.filter((f) => f.exists && MEDIA_EXT.has(fileExt(f.filepath))).map((f) => f.filepath);
+    if (b.dataset.fp !== undefined) { const f = files[+b.dataset.fp]; m.classList.add("hidden"); await Player.load(true); return Player.play(f.filepath, playable); }
     if (b.dataset.fs !== undefined) return api("open", { path: files[+b.dataset.fs].filepath, select: true });
     const act = b.dataset.fact;
+    if (act === "playall") { if (!playable.length) return; m.classList.add("hidden"); await Player.load(true); return Player.play(playable[0], playable); }
     if (act === "forget") {
       if (!confirmInline(t("Remove {name} from the library? Files stay on disk.", { name: c.name || "" }))) return;
       await api("library/forget", { key: c.channel_id, delete: false });

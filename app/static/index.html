@@ -17,6 +17,7 @@
     <button data-view="browse" class="on">Browse</button>
     <button data-view="downloads">Downloads <span id="dlBadge" class="badge hidden"></span></button>
     <button data-view="library">Library</button>
+    <button data-view="player">Player</button>
     <button data-view="settings">Settings</button>
   </nav>
   <div class="sys" id="sysinfo" title="Download folder free space"></div>
@@ -36,6 +37,7 @@
       <button data-kind="channels">Channels &amp; people</button>
       <button data-kind="playlists">Playlists</button>
       <button data-kind="url">Paste a link</button>
+      <button data-kind="software">Software &amp; files</button>
     </div>
     <div class="searchrow">
       <select id="platform" title="Where to search">
@@ -57,6 +59,24 @@
         <option value="500">500 results</option>
       </select>
       <button id="go" class="btn primary">Search</button>
+    </div>
+    <div id="softPicks" class="softpicks hidden">
+      <span class="muted small">Paste a download link or a program's download page from any website, or try one:</span>
+      <div class="chips" data-no-i18n>
+        <button class="chip pick" data-url="https://www.videolan.org/vlc/download-windows.html">VLC media player</button>
+        <button class="chip pick" data-url="https://www.7-zip.org/download.html">7-Zip</button>
+        <button class="chip pick" data-url="https://www.libreoffice.org/download/download-libreoffice/">LibreOffice</button>
+        <button class="chip pick" data-url="https://www.audacityteam.org/download/windows/">Audacity</button>
+        <button class="chip pick" data-url="https://obsproject.com/download">OBS Studio</button>
+        <button class="chip pick" data-url="https://notepad-plus-plus.org/downloads/">Notepad++</button>
+        <button class="chip pick" data-url="https://www.gimp.org/downloads/">GIMP</button>
+        <button class="chip pick" data-url="https://krita.org/en/download/">Krita</button>
+        <button class="chip pick" data-url="https://handbrake.fr/downloads.php">HandBrake</button>
+        <button class="chip pick" data-url="https://www.python.org/downloads/windows/">Python</button>
+        <button class="chip pick" data-url="https://keepassxc.org/download/">KeePassXC</button>
+        <button class="chip pick" data-url="https://www.chiark.greenend.org.uk/~sgtatham/putty/latest.html">PuTTY</button>
+      </div>
+      <span class="muted small">GitHub projects work too: paste any github.com project link to get its latest release files.</span>
     </div>
     <div id="urlOpts" class="urlopts hidden">
       <span class="muted">On a YouTube channel, load:</span>
@@ -133,6 +153,12 @@
       <div class="step"><b>1</b><div><h4>Find the person</h4><p data-i18n-html>Choose <em>Channels &amp; people</em>, type a name, then click <em>Load all videos</em> on their channel.</p></div></div>
       <div class="step"><b>2</b><div><h4>Narrow it down</h4><p>Filter by words in the title or by length (sermons are often over 1 hour), then sort by date.</p></div></div>
       <div class="step"><b>3</b><div><h4>Download in bulk</h4><p>Select all, or Shift+click to select a range. Choose MP3 or MP4 and a quality, then click Download.</p></div></div>
+    </div>
+    <div class="herofeat">
+      <div class="hf"><b class="hfi">⬇</b><div><h4>Software and files from any website</h4><p data-i18n-html>Paste a program's download link or download page (or a GitHub project) in <em>Software &amp; files</em>. Fast, resumable downloads with a SHA-256 check.</p></div>
+        <button class="btn sm" id="heroSoft">Try it</button></div>
+      <div class="hf"><b class="hfi">▶</b><div><h4>Built-in player</h4><p>Watch and listen to your downloads in the Player tab. It remembers where you stopped, and you can change the speed or set a sleep timer.</p></div>
+        <button class="btn sm" id="heroPlayer">Open player</button></div>
     </div>
     <p data-i18n-html class="muted small">Tip: you can paste a link to a playlist, a channel or a single video from almost any site in <em>Paste a link</em>.</p>
   </div>
@@ -214,6 +240,75 @@
   </div>
   <div id="libDupes" class="dupes card hidden" data-no-i18n></div>
   <div id="libChannels" class="libchannels" data-no-i18n></div>
+</section>
+
+<!-- ============================== PLAYER -->
+<section id="view-player" class="view">
+  <div class="player-layout">
+    <div class="pl-stage card" id="plStage">
+      <div class="pl-screen" id="plScreen">
+        <video id="plVideo" playsinline preload="metadata"></video>
+        <img id="plCover" class="pl-cover hidden" alt="" referrerpolicy="no-referrer">
+        <div id="plArt" class="pl-art hidden">♪</div>
+        <div id="plEmpty" class="pl-empty">
+          <div class="pl-bigicon">▶</div>
+          <h3>Your downloads, ready to play</h3>
+          <p class="muted">Pick something from All media on the right, or press Play in Downloads or Library.</p>
+        </div>
+      </div>
+      <div class="pl-info"><h3 id="plTitle" data-no-i18n></h3><div id="plSub" class="muted small" data-no-i18n></div></div>
+      <div class="pl-seek"><span id="plCur" data-no-i18n>0:00</span><input type="range" id="plSeek" min="0" max="1000" value="0" title="Seek"><span id="plDur" data-no-i18n>0:00</span></div>
+      <div class="pl-controls">
+        <div class="pl-left">
+          <button class="btn ghost icon" id="plShuffle" title="Shuffle"><svg class="ico" viewBox="0 0 24 24"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg></button>
+          <button class="btn ghost icon" id="plRepeat" title="Repeat"></button>
+        </div>
+        <div class="pl-center">
+          <button class="btn ghost icon" data-plc="prev" title="Previous (Shift+Left)"><svg class="ico" viewBox="0 0 24 24"><path d="M19 20 9 12l10-8zM5 4v16"/></svg></button>
+          <button class="btn ghost icon pl-skip" data-plc="back" title="Back 10 seconds (Left arrow)">-10</button>
+          <button class="btn primary pl-big pl-playbtn" title="Play"></button>
+          <button class="btn ghost icon pl-skip" data-plc="fwd" title="Forward 30 seconds (L)">+30</button>
+          <button class="btn ghost icon" data-plc="next" title="Next (Shift+Right)"><svg class="ico" viewBox="0 0 24 24"><path d="m5 4 10 8-10 8zM19 4v16"/></svg></button>
+        </div>
+        <div class="pl-right">
+          <select id="plSpeed" title="Playback speed">
+            <option value="0.75">0.75×</option><option value="1">1×</option><option value="1.25">1.25×</option>
+            <option value="1.5">1.5×</option><option value="1.75">1.75×</option><option value="2">2×</option>
+          </select>
+          <button class="btn ghost icon" id="plMute" title="Mute (M)"><svg class="ico" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4zM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg></button>
+          <input type="range" id="plVol" min="0" max="1" step="0.05" title="Volume">
+          <button class="btn ghost icon hidden" id="plPip" title="Picture in picture"><svg class="ico" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><rect x="12" y="11" width="8" height="6" rx="1"/></svg></button>
+          <button class="btn ghost icon" id="plFull" title="Full screen (F)"><svg class="ico" viewBox="0 0 24 24"><path d="M3 9V3h6M21 9V3h-6M3 15v6h6M21 15v6h-6"/></svg></button>
+        </div>
+      </div>
+      <div class="pl-extra">
+        <label class="inline-sel">Sleep timer
+          <select id="plSleep">
+            <option value="0">Off</option><option value="15">15 minutes</option><option value="30">30 minutes</option>
+            <option value="45">45 minutes</option><option value="60">1 hour</option><option value="end">At the end of this item</option>
+          </select>
+        </label>
+        <span class="muted small" id="plSleepLeft" data-no-i18n></span>
+        <span class="muted small pl-keys">Keys: Space play/pause · ← → 10 s · Shift+← → previous/next · M mute · F full screen</span>
+      </div>
+    </div>
+
+    <div class="pl-side card">
+      <div class="pl-sidehead">
+        <div class="seg sm" id="plSideTabs"><button data-pl="queue" class="on">Up next</button><button data-pl="library">All media</button></div>
+        <button class="btn ghost sm" id="plRefresh" title="Refresh the list">↻</button>
+      </div>
+      <div id="plQueueTools" class="pl-tools"><span class="muted small" id="plQCount" data-no-i18n></span><button class="btn ghost sm" id="plClearQ">Clear Up next</button></div>
+      <div id="plFilters" class="pl-tools hidden">
+        <input id="plSearch" placeholder="Search your media" spellcheck="false">
+        <select id="plType"><option value="">Audio and video</option><option value="audio">Audio</option><option value="video">Video</option></select>
+        <select id="plChannel" data-no-i18n></select>
+        <span class="muted small" id="plLibCount" data-no-i18n></span>
+        <button class="btn primary sm" id="plPlayAll">Play all</button>
+      </div>
+      <div id="plList" class="pl-list" data-no-i18n></div>
+    </div>
+  </div>
 </section>
 
 <!-- ============================== SETTINGS -->
@@ -376,6 +471,20 @@
 </section>
 </main>
 
+<!-- ============================== MINI PLAYER -->
+<div id="miniPlayer" class="mini hidden">
+  <div class="mp-progress" id="mpProgress"><i id="mpBar"></i></div>
+  <img id="mpThumb" alt="" referrerpolicy="no-referrer">
+  <div class="mp-txt"><div id="mpTitle" data-no-i18n></div><div id="mpSub" class="muted small" data-no-i18n></div></div>
+  <span class="muted small" id="mpTime" data-no-i18n></span>
+  <button class="btn ghost icon" data-plc="prev" title="Previous"><svg class="ico" viewBox="0 0 24 24"><path d="M19 20 9 12l10-8zM5 4v16"/></svg></button>
+  <button class="btn primary icon pl-playbtn" title="Play"></button>
+  <button class="btn ghost icon" data-plc="next" title="Next"><svg class="ico" viewBox="0 0 24 24"><path d="m5 4 10 8-10 8zM19 4v16"/></svg></button>
+  <button class="btn ghost sm" data-plc="speed" id="mpSpeed" title="Playback speed" data-no-i18n>1×</button>
+  <button class="btn ghost icon" data-plc="expand" title="Open player"><svg class="ico" viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button>
+  <button class="btn ghost icon" data-plc="stop" title="Stop and close"><svg class="ico" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+</div>
+
 <!-- ============================== ACTION BAR -->
 <footer class="actionbar" id="actionbar">
   <div class="seg" id="modeSeg">
@@ -470,13 +579,6 @@
   </div>
 </div>
 
-<div class="modal hidden" id="playerModal">
-  <div class="modal-card player-card">
-    <button class="btn ghost icon close" data-close title="Close"><svg class="ico" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
-    <h3 id="playerTitle" data-no-i18n></h3>
-    <div id="playerBox" data-no-i18n></div>
-  </div>
-</div>
 <div class="modal hidden" id="filesModal">
   <div class="modal-card">
     <button class="btn ghost icon close" data-close title="Close"><svg class="ico" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
@@ -487,5 +589,6 @@
 <div class="toasts" id="toasts"></div>
 <script src="/static/i18n.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/player.js"></script>
 </body>
 </html>
